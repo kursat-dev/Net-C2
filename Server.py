@@ -144,7 +144,7 @@ class C2Server:
     \. \`-\  \ \\:\____/\  \::\ \          \:\_\ \ \\:\____/\ 
      \__\/ \__\/ \_____\/   \__\/           \_____\/ \_____\/ 
                                 By: Zer0 Crypt0
-                                     version: 1.0.0
+                                     version: 1.1.0
         """
         print("\033[95m" + banner + "\033[0m")
         print(f"\033[36m[+]\033[0m \033[94mListening on {self.host}:{self.port}\033[0m")
